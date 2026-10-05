@@ -15,6 +15,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "freelancer_website": "",
     "auto_merge_duplicates": True,
     "custom_chain_brands": "",
+    "saved_prospect_views": [],
     "sheet_show_employees": True,
     "sheet_show_contacts": True,
     "sheet_show_synthesis": True,

@@ -9,56 +9,32 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">🎯 Prospect Solution</div>
-    <nav class="tabs" id="main-tabs">
-      <button class="tab active" data-view="prospects">📋 Prospects</button>
-      <button class="tab" data-view="follow-ups">📞 À appeler <span class="pill" id="follow-up-count" hidden></span></button>
-      <button class="tab" data-view="open-data">🔎 Open Data</button>
-      <button class="tab" data-view="google-maps">🗺️ Google Maps</button>
-      <button class="tab" data-view="settings">⚙️ Réglages</button>
+  <div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">🎯</span><span class="brand-name">Prospect Solution</span></div>
+    <nav class="tabs" id="main-tabs" aria-label="Navigation principale">
+      <button class="tab active" data-view="prospects"><span class="tab-icon">📋</span><span class="tab-label">Prospects</span></button>
+      <button class="tab" data-view="follow-ups"><span class="tab-icon">📞</span><span class="tab-label">À appeler</span><span class="pill" id="follow-up-count" hidden></span></button>
+      <div class="nav-section">Trouver des prospects</div>
+      <button class="tab" data-view="open-data"><span class="tab-icon">🔎</span><span class="tab-label">Open Data</span></button>
+      <button class="tab" data-view="google-maps"><span class="tab-icon">🗺️</span><span class="tab-label">Google Maps</span></button>
+      <div class="nav-section">Configuration</div>
+      <button class="tab" data-view="settings"><span class="tab-icon">⚙️</span><span class="tab-label">Réglages</span></button>
     </nav>
-    <div class="connection-indicator" id="connection-indicator" title="Connexion temps réel">●</div>
-  </header>
-  <main>
+    <div class="sidebar-footer"><span class="connection-indicator" id="connection-indicator">●</span><span class="connection-label">Temps réel</span></div>
+  </aside>
+  <main class="content">
     <section class="view active" id="view-prospects">
-      <div class="stat-row" id="statistics"></div>
-      <div class="toolbar">
-        <input type="search" id="filter-search" placeholder="Rechercher un nom, une ville, un site…">
-        <select id="filter-sector"><option value="">Tous les secteurs</option></select>
-        <select id="filter-opportunity"></select>
-        <select id="filter-status"></select>
-        <select id="filter-website">
-          <option value="">Avec ou sans site</option>
-          <option value="with">Avec site</option>
-          <option value="without">Sans site</option>
-        </select>
-        <div class="area-filter">
-          <div class="area-filter-input" id="area-filter-input"></div>
-          <label class="radius-field">Rayon <input type="number" id="area-radius" value="5" min="0.5" max="200" step="0.5"> km</label>
-          <button class="button ghost small" id="area-clear" type="button" hidden title="Retirer le filtre de lieu">✕</button>
+      <header class="page-header">
+        <div>
+          <h1>Prospects</h1>
+          <p class="page-subtitle" id="prospect-count"></p>
         </div>
-        <select id="filter-source">
-          <option value="">Toutes les sources</option>
-          <option value="government_registry">Registre INSEE</option>
-          <option value="openstreetmap">OpenStreetMap</option>
-          <option value="google_maps">Google Maps</option>
-        </select>
-      </div>
-      <div class="toolbar actions">
-        <span class="muted" id="prospect-count"></span>
-        <span class="spacer"></span>
-        <button class="button primary" id="merge-selection" hidden>🔗 Fusionner la sélection</button>
-        <button class="button secondary" id="merge-duplicates" title="Regroupe les fiches qui décrivent la même entreprise (même SIRET, même site, même téléphone ou même nom à la même adresse)">🔗 Fusionner les doublons</button>
-        <button class="button secondary" id="add-prospect-toggle">➕ Ajouter un prospect</button>
-        <button class="button secondary" id="discover-missing-websites" title="Relance la recherche de site pour tous les prospects sans site">🤖 Chercher les sites manquants</button>
-        <button class="button secondary" id="enrich-phones" title="Cherche sur Google Maps les prospects sans téléphone (30 au maximum par passage)">📞 Compléter les téléphones</button>
-        <button class="button secondary" id="remove-chains" title="Supprime les chaînes et franchises déjà importées">🧹 Retirer les chaînes</button>
-        <button class="button secondary" id="refresh-all" title="Recherche à nouveau les sites manquants, réanalyse toutes les fiches et fusionne les doublons">🔄 Analyser tous les prospects</button>
-        <button class="button secondary" id="scan-unscanned">⚡ Analyser les prospects non analysés</button>
-        <button class="button secondary" id="export-csv">⬇️ Exporter en CSV</button>
-      </div>
-      <form class="panel add-prospect-form" id="add-prospect-form" hidden>
+        <div class="page-actions" id="prospect-page-actions"></div>
+      </header>
+      <div class="stat-row" id="statistics"></div>
+      <form class="card add-prospect-form" id="add-prospect-form" hidden>
+        <h2>Ajouter un prospect</h2>
         <div class="field-grid">
           <label>Nom de l'entreprise<input name="name" required></label>
           <label>Site web<input name="website_url" placeholder="https://…"></label>
@@ -66,20 +42,48 @@
           <label>Téléphone<input name="phone"></label>
           <label>Secteur<select name="sector_key"><option value="">Autre</option></select></label>
         </div>
-        <button class="button primary" type="submit">Ajouter et analyser</button>
+        <div class="form-actions">
+          <button class="button ghost" type="button" id="add-prospect-cancel">Annuler</button>
+          <button class="button primary" type="submit">Ajouter et analyser</button>
+        </div>
       </form>
+      <div class="filter-card">
+        <div class="filter-top">
+          <div class="search-field">
+            <span class="search-icon" aria-hidden="true">🔍</span>
+            <input type="search" id="filter-search" placeholder="Rechercher un nom, une ville, un téléphone, un dirigeant, une note…" aria-label="Rechercher">
+          </div>
+          <div id="saved-views"></div>
+          <div id="column-chooser"></div>
+        </div>
+        <div class="filter-buttons" id="filter-buttons"></div>
+        <div class="filter-chips" id="filter-chips" hidden></div>
+      </div>
+      <div class="bulk-bar" id="bulk-bar" hidden></div>
       <div class="table-wrapper">
         <table class="prospect-table">
           <thead id="prospect-table-head"></thead>
           <tbody id="prospect-rows"></tbody>
         </table>
         <div class="empty-state" id="prospects-empty" hidden>
-          <p>Aucun prospect pour l'instant.</p>
-          <p class="muted">Lancez une recherche dans l'onglet <strong>Open Data</strong> ou <strong>Google Maps</strong>.</p>
+          <div class="empty-icon">🎯</div>
+          <p><strong>Aucun prospect pour l'instant.</strong></p>
+          <p class="muted">Lancez une recherche dans <strong>Open Data</strong> ou <strong>Google Maps</strong>.</p>
+        </div>
+        <div class="empty-state" id="prospects-no-match" hidden>
+          <div class="empty-icon">🧐</div>
+          <p><strong>Aucun prospect ne correspond à ces filtres.</strong></p>
+          <button class="button secondary" type="button" id="reset-filters">Réinitialiser les filtres</button>
         </div>
       </div>
     </section>
     <section class="view" id="view-follow-ups">
+      <header class="page-header">
+        <div>
+          <h1>À appeler</h1>
+          <p class="page-subtitle">Vos relances du jour et les meilleurs prospects à appeler ensuite.</p>
+        </div>
+      </header>
       <h2>À rappeler aujourd'hui</h2>
       <div class="card-list" id="due-follow-ups"></div>
       <h2>Prochains appels suggérés</h2>
@@ -87,10 +91,14 @@
       <div class="card-list" id="suggested-calls"></div>
     </section>
     <section class="view" id="view-open-data">
+      <header class="page-header">
+        <div>
+          <h1>Recherche Open Data</h1>
+          <p class="page-subtitle">Registre officiel des entreprises (INSEE/Sirene) et OpenStreetMap. 100 % gratuit et légal. Les sites web manquants sont recherchés automatiquement.</p>
+        </div>
+      </header>
       <div class="search-layout">
         <form class="panel" id="open-data-form">
-          <h2>Recherche Open Data</h2>
-          <p class="muted">Registre officiel des entreprises (INSEE/Sirene) et OpenStreetMap. 100 % gratuit et légal. Les sites web manquants sont recherchés automatiquement.</p>
           <div class="area-picker" data-area-picker="open-data"></div>
           <fieldset>
             <legend>Secteurs</legend>
@@ -123,9 +131,14 @@
       </div>
     </section>
     <section class="view" id="view-google-maps">
+      <header class="page-header">
+        <div>
+          <h1>Recherche Google Maps</h1>
+          <p class="page-subtitle">Fiches Google : téléphone, site, note et avis. À utiliser avec modération.</p>
+        </div>
+      </header>
       <div class="search-layout">
         <form class="panel" id="google-maps-form">
-          <h2>Recherche Google Maps</h2>
           <div class="callout warning">
             <strong>⚠️ À lire avant de lancer.</strong> Le scraping de Google Maps viole les conditions d'utilisation de Google. Le risque concret est un CAPTCHA ou un blocage temporaire de votre adresse IP (Google vous demandera des CAPTCHA pendant quelques heures, y compris dans vos recherches normales). Gardez des volumes raisonnables (quelques centaines de fiches par jour), laissez le mode visible activé pour pouvoir résoudre un CAPTCHA, et ne vous connectez jamais à votre compte Google dans ce navigateur.
           </div>
@@ -151,100 +164,125 @@
       </div>
     </section>
     <section class="view" id="view-settings">
-      <form class="panel settings-form" id="settings-form">
-        <h2>Votre identité <span class="muted">(utilisée dans les scripts d'appel et les e-mails)</span></h2>
-        <div class="field-grid">
-          <label>Prénom<input name="freelancer_first_name"></label>
-          <label>Nom<input name="freelancer_last_name"></label>
-          <label>Nom commercial<input name="freelancer_company"></label>
-          <label>Ville<input name="freelancer_city"></label>
-          <label>Téléphone<input name="freelancer_phone"></label>
-          <label>E-mail<input name="freelancer_email" type="email"></label>
-          <label>Site web<input name="freelancer_website"></label>
+      <header class="page-header">
+        <div>
+          <h1>Réglages</h1>
+          <p class="page-subtitle">Votre identité, l'affichage des fiches, l'analyse des sites et l'IA locale.</p>
         </div>
-        <h2>Fiche client <span class="muted">(ce qui s'affiche dans la fiche d'un prospect)</span></h2>
-        <div class="field-grid">
-          <label class="checkbox"><input type="checkbox" name="sheet_show_employees"> Nombre d'employés recensé</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_contacts"> Coordonnées (téléphone, adresse, e-mail, site web)</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_synthesis"> Synthèse</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_diagnosis"> Diagnostic</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_script"> Script d'appel</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_email"> E-mail de suite</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_technical"> Technique</label>
-          <label class="checkbox"><input type="checkbox" name="sheet_show_history"> Historique des appels</label>
-        </div>
-        <h2>Doublons</h2>
-        <div class="field-grid">
-          <label class="checkbox"><input type="checkbox" name="auto_merge_duplicates"> Fusionner automatiquement les fiches identiques après chaque recherche</label>
-        </div>
-        <h2>Chaînes et franchises <span class="muted">(en plus des ~390 enseignes reconnues automatiquement)</span></h2>
-        <label>Enseignes à exclure, une par ligne <span class="muted">(alimentée aussi par le bouton « C'est une chaîne » des fiches)</span>
-          <textarea name="custom_chain_brands" rows="4" placeholder="Kiabi&#10;Ma Petite Franchise"></textarea>
-        </label>
-        <h2>Analyse des sites</h2>
-        <div class="field-grid">
-          <label>Analyses en parallèle<input name="scan_concurrency" type="number" min="1" max="8"></label>
-          <label class="checkbox"><input type="checkbox" name="lighthouse_enabled"> Audit Google Lighthouse <span class="muted" id="lighthouse-availability"></span></label>
-          <label>Pages internes analysées par site<input name="crawl_internal_pages" type="number" min="0" max="8"></label>
-        </div>
-        <h2>Recherche des sites web</h2>
-        <p class="muted">Pour chaque entreprise sans site, l'outil devine d'abord le nom de domaine (.fr, .com, .eu, .net, .org, .info), puis interroge les moteurs cochés dans l'ordre. Chaque site candidat est vérifié : nom, adresse, téléphone, SIREN dans les mentions légales. Un moteur qui bloque est automatiquement mis de côté jusqu'à la fin de la tâche.</p>
-        <div class="field-grid">
-          <label class="checkbox"><input type="checkbox" name="search_engine_duckduckgo"> DuckDuckGo</label>
-          <label class="checkbox"><input type="checkbox" name="search_engine_bing"> Bing</label>
-          <label class="checkbox"><input type="checkbox" name="search_engine_google_browser"> Google (via navigateur, le plus pertinent mais CAPTCHA possible)</label>
-          <label class="checkbox"><input type="checkbox" name="google_search_headless"> Google en mode invisible</label>
-        </div>
-        <h2>Google Maps</h2>
-        <div class="field-grid">
-          <label class="checkbox"><input type="checkbox" name="google_maps_headless"> Mode invisible par défaut</label>
-          <label>Pause minimale entre deux fiches (s)<input name="google_maps_pause_min_seconds" type="number" step="0.5" min="0.5"></label>
-          <label>Pause maximale entre deux fiches (s)<input name="google_maps_pause_max_seconds" type="number" step="0.5" min="1"></label>
-        </div>
-        <h2>Intelligence artificielle locale (Ollama)</h2>
-        <p class="muted">Sans IA, les fiches sont rédigées par un moteur de règles (fiable et instantané). Avec Ollama, le résumé, l'accroche et l'e-mail sont réécrits de façon plus naturelle, sur votre propre carte graphique, gratuitement.</p>
-        <div class="field-grid">
-          <label>Mode
-            <select name="llm_mode">
-              <option value="disabled">Désactivé (moteur de règles)</option>
-              <option value="managed">Lancé par l'application sur la carte choisie</option>
-              <option value="external">Serveur Ollama existant</option>
-            </select>
+      </header>
+      <form class="settings-form" id="settings-form">
+        <section class="settings-section">
+          <h2>Votre identité <span class="muted">(utilisée dans les scripts d'appel et les e-mails)</span></h2>
+          <div class="field-grid">
+            <label>Prénom<input name="freelancer_first_name"></label>
+            <label>Nom<input name="freelancer_last_name"></label>
+            <label>Nom commercial<input name="freelancer_company"></label>
+            <label>Ville<input name="freelancer_city"></label>
+            <label>Téléphone<input name="freelancer_phone"></label>
+            <label>E-mail<input name="freelancer_email" type="email"></label>
+            <label>Site web<input name="freelancer_website"></label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Fiche client <span class="muted">(ce qui s'affiche dans la fiche d'un prospect)</span></h2>
+          <div class="field-grid">
+            <label class="checkbox"><input type="checkbox" name="sheet_show_employees"> Nombre d'employés recensé</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_contacts"> Coordonnées (téléphone, adresse, e-mail, site web)</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_synthesis"> Synthèse</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_diagnosis"> Diagnostic</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_script"> Script d'appel</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_email"> E-mail de suite</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_technical"> Technique</label>
+            <label class="checkbox"><input type="checkbox" name="sheet_show_history"> Historique des appels</label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Doublons</h2>
+          <div class="field-grid">
+            <label class="checkbox"><input type="checkbox" name="auto_merge_duplicates"> Fusionner automatiquement les fiches identiques après chaque recherche</label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Chaînes et franchises <span class="muted">(en plus des ~390 enseignes reconnues automatiquement)</span></h2>
+          <label>Enseignes à exclure, une par ligne <span class="muted">(alimentée aussi par le bouton « C'est une chaîne » des fiches)</span>
+            <textarea name="custom_chain_brands" rows="4" placeholder="Kiabi&#10;Ma Petite Franchise"></textarea>
           </label>
-          <label>Carte graphique dédiée<select name="llm_gpu_uuid" id="gpu-select"><option value="">Choix automatique d'Ollama</option></select></label>
-          <label>Modèle
-            <input name="llm_model" list="model-suggestions">
-            <datalist id="model-suggestions">
-              <option value="qwen2.5:7b-instruct">
-              <option value="mistral:7b-instruct">
-              <option value="llama3.1:8b">
-              <option value="gemma2:2b">
-            </datalist>
-          </label>
-          <label>Modèle de vision (analyse du design) <span class="muted">vide = désactivé</span>
-            <input name="llm_vision_model" list="vision-model-suggestions" placeholder="qwen2.5vl:3b">
-            <datalist id="vision-model-suggestions">
-              <option value="qwen2.5vl:3b">
-              <option value="qwen2.5vl:7b">
-              <option value="llava:7b">
-              <option value="minicpm-v">
-            </datalist>
-          </label>
-          <label>Port du serveur géré<input name="llm_managed_port" type="number"></label>
-          <label>URL du serveur existant<input name="llm_external_url"></label>
-          <label>Exécutable Ollama<input name="ollama_executable"></label>
+        </section>
+        <section class="settings-section">
+          <h2>Analyse des sites</h2>
+          <div class="field-grid">
+            <label>Analyses en parallèle<input name="scan_concurrency" type="number" min="1" max="8"></label>
+            <label class="checkbox"><input type="checkbox" name="lighthouse_enabled"> Audit Google Lighthouse <span class="muted" id="lighthouse-availability"></span></label>
+            <label>Pages internes analysées par site<input name="crawl_internal_pages" type="number" min="0" max="8"></label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Recherche des sites web</h2>
+          <p class="muted">Pour chaque entreprise sans site, l'outil devine d'abord le nom de domaine (.fr, .com, .eu, .net, .org, .info), puis interroge les moteurs cochés dans l'ordre. Chaque site candidat est vérifié : nom, adresse, téléphone, SIREN dans les mentions légales. Un moteur qui bloque est automatiquement mis de côté jusqu'à la fin de la tâche.</p>
+          <div class="field-grid">
+            <label class="checkbox"><input type="checkbox" name="search_engine_duckduckgo"> DuckDuckGo</label>
+            <label class="checkbox"><input type="checkbox" name="search_engine_bing"> Bing</label>
+            <label class="checkbox"><input type="checkbox" name="search_engine_google_browser"> Google (via navigateur, le plus pertinent mais CAPTCHA possible)</label>
+            <label class="checkbox"><input type="checkbox" name="google_search_headless"> Google en mode invisible</label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Google Maps</h2>
+          <div class="field-grid">
+            <label class="checkbox"><input type="checkbox" name="google_maps_headless"> Mode invisible par défaut</label>
+            <label>Pause minimale entre deux fiches (s)<input name="google_maps_pause_min_seconds" type="number" step="0.5" min="0.5"></label>
+            <label>Pause maximale entre deux fiches (s)<input name="google_maps_pause_max_seconds" type="number" step="0.5" min="1"></label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Intelligence artificielle locale (Ollama)</h2>
+          <p class="muted">Sans IA, les fiches sont rédigées par un moteur de règles (fiable et instantané). Avec Ollama, le résumé, l'accroche et l'e-mail sont réécrits de façon plus naturelle, sur votre propre carte graphique, gratuitement.</p>
+          <div class="field-grid">
+            <label>Mode
+              <select name="llm_mode">
+                <option value="disabled">Désactivé (moteur de règles)</option>
+                <option value="managed">Lancé par l'application sur la carte choisie</option>
+                <option value="external">Serveur Ollama existant</option>
+              </select>
+            </label>
+            <label>Carte graphique dédiée<select name="llm_gpu_uuid" id="gpu-select"><option value="">Choix automatique d'Ollama</option></select></label>
+            <label>Modèle
+              <input name="llm_model" list="model-suggestions">
+              <datalist id="model-suggestions">
+                <option value="qwen2.5:7b-instruct">
+                <option value="mistral:7b-instruct">
+                <option value="llama3.1:8b">
+                <option value="gemma2:2b">
+              </datalist>
+            </label>
+            <label>Modèle de vision (analyse du design) <span class="muted">vide = désactivé</span>
+              <input name="llm_vision_model" list="vision-model-suggestions" placeholder="qwen2.5vl:3b">
+              <datalist id="vision-model-suggestions">
+                <option value="qwen2.5vl:3b">
+                <option value="qwen2.5vl:7b">
+                <option value="llava:7b">
+                <option value="minicpm-v">
+              </datalist>
+            </label>
+            <label>Port du serveur géré<input name="llm_managed_port" type="number"></label>
+            <label>URL du serveur existant<input name="llm_external_url"></label>
+            <label>Exécutable Ollama<input name="ollama_executable"></label>
+          </div>
+          <div id="gpu-diagnosis"></div>
+          <div class="llm-status" id="llm-status"></div>
+          <div class="toolbar">
+            <button class="button secondary" type="button" id="llm-start">▶️ Démarrer Ollama</button>
+            <button class="button secondary" type="button" id="llm-stop">⏹️ Arrêter</button>
+            <button class="button secondary" type="button" id="llm-pull">⬇️ Télécharger le modèle</button>
+          </div>
+        </section>
+        <div class="form-footer">
+          <button class="button primary" type="submit">💾 Enregistrer les réglages</button>
         </div>
-        <div id="gpu-diagnosis"></div>
-        <div class="llm-status" id="llm-status"></div>
-        <div class="toolbar">
-          <button class="button secondary" type="button" id="llm-start">▶️ Démarrer Ollama</button>
-          <button class="button secondary" type="button" id="llm-stop">⏹️ Arrêter</button>
-          <button class="button secondary" type="button" id="llm-pull">⬇️ Télécharger le modèle</button>
-        </div>
-        <button class="button primary" type="submit">💾 Enregistrer</button>
       </form>
     </section>
   </main>
+  </div>
   <aside class="drawer" id="prospect-drawer" hidden>
     <div class="drawer-content" id="prospect-detail"></div>
   </aside>

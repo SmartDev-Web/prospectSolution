@@ -152,6 +152,17 @@ class ProspectUpdate(BaseModel):
     sector_key: str | None = None
 
 
+class BulkUpdateRequest(BaseModel):
+    """Same edit applied to a selection of prospects."""
+    prospect_ids: list[int] = Field(min_length=1)
+    changes: ProspectUpdate
+
+
+class BulkDeleteRequest(BaseModel):
+    """Selection of prospects to delete."""
+    prospect_ids: list[int] = Field(min_length=1)
+
+
 class ActivityCreate(BaseModel):
     """A logged interaction with a prospect (call, email, meeting, note)."""
     kind: Literal["call", "email", "meeting", "note"]

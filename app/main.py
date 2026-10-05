@@ -20,6 +20,8 @@ from app.llm.gpu import describe_graphics_cards
 from app.llm.ollama import ollama_service
 from app.models import (
     ActivityCreate,
+    BulkDeleteRequest,
+    BulkUpdateRequest,
     DiagnosisOverrides,
     GoogleMapsEnrichmentRequest,
     GoogleMapsSearchRequest,
@@ -108,23 +110,34 @@ async def create_google_maps_search(search_request: GoogleMapsSearchRequest) -> 
 
 
 def read_prospect_filters(
-    status: str | None = None,
-    sector_key: str | None = None,
-    opportunity_level: str | None = None,
+    status: list[str] = Query(default=[]),
+    sector_key: list[str] = Query(default=[]),
+    opportunity_level: list[str] = Query(default=[]),
+    source: list[str] = Query(default=[]),
+    city: list[str] = Query(default=[]),
     website: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    follow_up: str | None = None,
+    score_min: float | None = None,
+    score_max: float | None = None,
+    employees_min: int | None = None,
+    rating_min: float | None = None,
+    created_after: str | None = None,
     search_text: str | None = None,
-    source: str | None = None,
     sort: str | None = None,
     sort_direction: str | None = None,
     center_latitude: float | None = None,
     center_longitude: float | None = None,
     radius_km: float | None = None,
     area_city: str | None = None,
-) -> dict[str, str | float | None]:
-    """Collect the prospect list filters shared by the list and export endpoints."""
+) -> dict[str, Any]:
+    """Collect the prospect list filters shared by the list and export endpoints; multiple choice filters repeat their parameter."""
     return {
-        "status": status, "sector_key": sector_key, "opportunity_level": opportunity_level, "website": website,
-        "search_text": search_text, "source": source, "sort": sort, "sort_direction": sort_direction,
+        "status": status, "sector_key": sector_key, "opportunity_level": opportunity_level, "source": source, "city": city,
+        "website": website, "phone": phone, "email": email, "follow_up": follow_up,
+        "score_min": score_min, "score_max": score_max, "employees_min": employees_min, "rating_min": rating_min, "created_after": created_after,
+        "search_text": search_text, "sort": sort, "sort_direction": sort_direction,
         "center_latitude": center_latitude, "center_longitude": center_longitude, "radius_km": radius_km, "area_city": area_city,
     }
 
@@ -132,6 +145,22 @@ def read_prospect_filters(
 @application.get("/api/prospects")
 async def list_prospects(prospect_filters: dict = Depends(read_prospect_filters)) -> list[dict]:
     return prospect_repository.list_prospects(prospect_filters)
+
+
+@application.get("/api/prospects/facets")
+async def get_prospect_facets() -> dict:
+    return prospect_repository.facets()
+
+
+@application.post("/api/prospects/bulk-update")
+async def bulk_update_prospects(bulk_update_request: BulkUpdateRequest) -> dict:
+    changes = bulk_update_request.changes.model_dump(exclude_unset=True)
+    return {"updated": prospect_repository.update_prospects(bulk_update_request.prospect_ids, changes)}
+
+
+@application.post("/api/prospects/bulk-delete")
+async def bulk_delete_prospects(bulk_delete_request: BulkDeleteRequest) -> dict:
+    return {"deleted": prospect_repository.delete_prospects(bulk_delete_request.prospect_ids)}
 
 
 @application.get("/api/prospects/export.csv")

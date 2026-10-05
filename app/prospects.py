@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import math
+from datetime import date
 from typing import Any
 
 from app.chains import detect_chain
@@ -44,6 +45,22 @@ SORTABLE_COLUMNS = {
     "status": (STATUS_RANK_SQL, "ASC"),
     "follow_up": ("next_follow_up", "ASC"),
     "recent": ("created_at", "DESC"),
+    "sector": ("category_label COLLATE NOCASE", "ASC"),
+    "email": ("email", "ASC"),
+    "manager": ("manager_name COLLATE NOCASE", "ASC"),
+    "rating": ("google_rating", "DESC"),
+    "creation": ("creation_date", "DESC"),
+    "postal_code": ("postal_code", "ASC"),
+}
+# Pseudo values used by the list filters for prospects without any value in the column
+UNSCANNED_OPPORTUNITY = "unscanned"
+UNCLASSIFIED_SECTOR = "unclassified"
+PRESENCE_COLUMNS = {"website": "website_url", "phone": "phone", "email": "email"}
+NUMERIC_RANGE_FILTERS = {
+    "score_min": ("score", ">="),
+    "score_max": ("score", "<="),
+    "employees_min": ("employee_minimum", ">="),
+    "rating_min": ("google_rating", ">="),
 }
 
 
@@ -58,6 +75,93 @@ CSV_COLUMNS = (
     "website_url", "social_url", "employee_range", "manager_name", "distance_km", "score", "opportunity_level", "status", "next_follow_up", "google_rating",
     "google_review_count", "siret", "creation_date", "notes",
 )
+
+
+def split_filter_values(raw_values: Any) -> list[str]:
+    """Normalize a filter given as a single value, a comma separated string or a list into a list of values."""
+    if raw_values is None:
+        return []
+    value_list = raw_values if isinstance(raw_values, (list, tuple, set)) else str(raw_values).split(",")
+    return [str(value).strip() for value in value_list if str(value).strip()]
+
+
+def append_membership_condition(
+    conditions: list[str], parameters: dict[str, Any], column_expression: str, values: list[str], parameter_prefix: str, empty_value: str | None = None,
+) -> None:
+    """Add a "column is one of these values" condition, where an optional pseudo value stands for an empty column."""
+    if not values:
+        return
+    alternatives = []
+    concrete_values = [value for value in values if value != empty_value]
+    if concrete_values:
+        placeholders = []
+        for value_position, value in enumerate(concrete_values):
+            parameter_name = f"{parameter_prefix}_{value_position}"
+            parameters[parameter_name] = value
+            placeholders.append(f":{parameter_name}")
+        alternatives.append(f"{column_expression} IN ({', '.join(placeholders)})")
+    if empty_value is not None and empty_value in values:
+        alternatives.append(f"{column_expression} IS NULL")
+    conditions.append(f"({' OR '.join(alternatives)})")
+
+
+def parse_number_filter(raw_value: Any) -> float | None:
+    """Return a numeric filter bound, or None when the field is empty or invalid."""
+    try:
+        return float(raw_value) if raw_value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def build_filter_conditions(filters: dict[str, Any], today: str) -> tuple[list[str], dict[str, Any]]:
+    """Translate the list filters into SQL conditions; values of a same filter are combined with OR, filters with AND."""
+    conditions: list[str] = []
+    parameters: dict[str, Any] = {}
+    append_membership_condition(conditions, parameters, "status", split_filter_values(filters.get("status")), "status")
+    append_membership_condition(conditions, parameters, "sector_key", split_filter_values(filters.get("sector_key")), "sector", UNCLASSIFIED_SECTOR)
+    append_membership_condition(conditions, parameters, "opportunity_level", split_filter_values(filters.get("opportunity_level")), "opportunity", UNSCANNED_OPPORTUNITY)
+    append_membership_condition(conditions, parameters, "LOWER(city)", [city.lower() for city in split_filter_values(filters.get("city"))], "city")
+    source_conditions = []
+    for source_position, source in enumerate(split_filter_values(filters.get("source"))):
+        parameters[f"source_{source_position}"] = f'%"{source}"%'
+        source_conditions.append(f"sources LIKE :source_{source_position}")
+    if source_conditions:
+        conditions.append(f"({' OR '.join(source_conditions)})")
+    for filter_name, column_name in PRESENCE_COLUMNS.items():
+        if filters.get(filter_name) == "with":
+            conditions.append(f"({column_name} IS NOT NULL AND {column_name} != '')")
+        elif filters.get(filter_name) == "without":
+            conditions.append(f"({column_name} IS NULL OR {column_name} = '')")
+    for filter_name, (column_name, operator) in NUMERIC_RANGE_FILTERS.items():
+        bound = parse_number_filter(filters.get(filter_name))
+        if bound is not None:
+            conditions.append(f"{column_name} {operator} :{filter_name}")
+            parameters[filter_name] = bound
+    follow_up = filters.get("follow_up")
+    if follow_up in ("due", "planned"):
+        conditions.append(f"next_follow_up IS NOT NULL AND next_follow_up {'<=' if follow_up == 'due' else '>'} :today")
+        parameters["today"] = today
+    elif follow_up == "none":
+        conditions.append("next_follow_up IS NULL")
+    if filters.get("created_after"):
+        conditions.append("creation_date >= :created_after")
+        parameters["created_after"] = filters["created_after"]
+    if filters.get("search_text"):
+        conditions.append("(name LIKE :search_text OR legal_name LIKE :search_text OR city LIKE :search_text OR website_url LIKE :search_text OR phone LIKE :search_text OR manager_name LIKE :search_text OR notes LIKE :search_text)")
+        parameters["search_text"] = f"%{filters['search_text']}%"
+    search_area = read_search_area(filters)
+    if search_area:
+        center_latitude, center_longitude, radius_km = search_area
+        latitude_margin = radius_km / KILOMETRES_PER_LATITUDE_DEGREE
+        longitude_margin = radius_km / (KILOMETRES_PER_LATITUDE_DEGREE * max(math.cos(math.radians(center_latitude)), 0.1))
+        # The bounding box keeps the query fast; prospects without coordinates are matched by their city name
+        conditions.append("((latitude BETWEEN :minimum_latitude AND :maximum_latitude AND longitude BETWEEN :minimum_longitude AND :maximum_longitude) OR (latitude IS NULL AND city LIKE :area_city))")
+        parameters.update({
+            "minimum_latitude": center_latitude - latitude_margin, "maximum_latitude": center_latitude + latitude_margin,
+            "minimum_longitude": center_longitude - longitude_margin, "maximum_longitude": center_longitude + longitude_margin,
+            "area_city": filters.get("area_city") or "\u0000",
+        })
+    return conditions, parameters
 
 
 def read_search_area(filters: dict[str, Any]) -> tuple[float, float, float] | None:
@@ -397,39 +501,8 @@ class ProspectRepository:
 
     def list_prospects(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
         """Query prospects with optional filters and ordering."""
-        conditions: list[str] = []
-        parameters: dict[str, Any] = {}
-        if filters.get("status"):
-            conditions.append("status = :status")
-            parameters["status"] = filters["status"]
-        if filters.get("sector_key"):
-            conditions.append("sector_key = :sector_key")
-            parameters["sector_key"] = filters["sector_key"]
-        if filters.get("opportunity_level"):
-            conditions.append("opportunity_level = :opportunity_level")
-            parameters["opportunity_level"] = filters["opportunity_level"]
-        if filters.get("website") == "with":
-            conditions.append("website_url IS NOT NULL")
-        elif filters.get("website") == "without":
-            conditions.append("website_url IS NULL")
-        if filters.get("search_text"):
-            conditions.append("(name LIKE :search_text OR legal_name LIKE :search_text OR city LIKE :search_text OR website_url LIKE :search_text)")
-            parameters["search_text"] = f"%{filters['search_text']}%"
-        if filters.get("source"):
-            conditions.append("sources LIKE :source")
-            parameters["source"] = f'%"{filters["source"]}"%'
+        conditions, parameters = build_filter_conditions(filters, date.today().isoformat())
         search_area = read_search_area(filters)
-        if search_area:
-            center_latitude, center_longitude, radius_km = search_area
-            latitude_margin = radius_km / KILOMETRES_PER_LATITUDE_DEGREE
-            longitude_margin = radius_km / (KILOMETRES_PER_LATITUDE_DEGREE * max(math.cos(math.radians(center_latitude)), 0.1))
-            # The bounding box keeps the query fast; prospects without coordinates are matched by their city name
-            conditions.append("((latitude BETWEEN :minimum_latitude AND :maximum_latitude AND longitude BETWEEN :minimum_longitude AND :maximum_longitude) OR (latitude IS NULL AND city LIKE :area_city))")
-            parameters.update({
-                "minimum_latitude": center_latitude - latitude_margin, "maximum_latitude": center_latitude + latitude_margin,
-                "minimum_longitude": center_longitude - longitude_margin, "maximum_longitude": center_longitude + longitude_margin,
-                "area_city": filters.get("area_city") or "\u0000",
-            })
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         sort_key = filters.get("sort")
         order_clause = build_order_clause(None if sort_key == "distance" else sort_key, filters.get("sort_direction"))
@@ -500,6 +573,41 @@ class ProspectRepository:
         for prospect_row in self.list_prospects(filters):
             csv_writer.writerow({column_name: prospect_row.get(column_name) for column_name in CSV_COLUMNS})
         return "﻿" + output_buffer.getvalue()
+
+    def facets(self) -> dict[str, Any]:
+        """Count prospects per value of every multiple choice filter, so that each option shows its size."""
+        database = get_database()
+        source_counts: dict[str, int] = {}
+        for source_row in database.fetch_all("SELECT sources FROM prospects"):
+            stored_sources = source_row["sources"] or []
+            for source in json.loads(stored_sources) if isinstance(stored_sources, str) else stored_sources:
+                source_counts[source] = source_counts.get(source, 0) + 1
+        city_rows = database.fetch_all(
+            "SELECT MIN(city) AS city, COUNT(*) AS total FROM prospects WHERE city IS NOT NULL AND city != '' GROUP BY LOWER(city) ORDER BY total DESC, city"
+        )
+        return {
+            "sector_key": {row["value"]: row["total"] for row in database.fetch_all(f"SELECT COALESCE(sector_key, '{UNCLASSIFIED_SECTOR}') AS value, COUNT(*) AS total FROM prospects GROUP BY value")},
+            "opportunity_level": {row["value"]: row["total"] for row in database.fetch_all(f"SELECT COALESCE(opportunity_level, '{UNSCANNED_OPPORTUNITY}') AS value, COUNT(*) AS total FROM prospects GROUP BY value")},
+            "status": {row["value"]: row["total"] for row in database.fetch_all("SELECT status AS value, COUNT(*) AS total FROM prospects GROUP BY value")},
+            "source": source_counts,
+            "city": [{"city": row["city"], "total": row["total"]} for row in city_rows],
+        }
+
+    def update_prospects(self, prospect_identifiers: list[int], changes: dict[str, Any]) -> int:
+        """Apply the same edit to several prospects; return how many were updated."""
+        updated_count = 0
+        for prospect_identifier in prospect_identifiers:
+            if self.get_prospect(prospect_identifier) is not None:
+                self.update_prospect(prospect_identifier, dict(changes))
+                updated_count += 1
+        return updated_count
+
+    def delete_prospects(self, prospect_identifiers: list[int]) -> int:
+        """Delete several prospects; return how many existed."""
+        existing_identifiers = [identifier for identifier in prospect_identifiers if self.get_prospect(identifier) is not None]
+        for prospect_identifier in existing_identifiers:
+            self.delete_prospect(prospect_identifier)
+        return len(existing_identifiers)
 
     def statistics(self) -> dict[str, Any]:
         """Return pipeline counters displayed on the dashboard."""

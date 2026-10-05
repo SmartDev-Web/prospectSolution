@@ -141,3 +141,32 @@ def test_list_can_be_filtered_around_a_place():
     rows = prospect_repository.list_prospects({**area, "sort": "distance"})
     assert [(row["name"], row["distance_km"]) for row in rows] == [("Centre", 0.0), ("Quatre km", 4.0), ("Sans coordonnées", None)]
     assert [row["name"] for row in prospect_repository.list_prospects({**area, "sort": "distance", "sort_direction": "desc"})][:2] == ["Quatre km", "Centre"]
+
+
+def test_multiple_choice_filters_combine_values_with_or_and_filters_with_and():
+    prospect_repository._insert_prospect(ProspectCandidate(name="Chez Paul", source="manual", sector_key="restaurant", city="Lattes", phone="0467000001"))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Rose et Lys", source="manual", sector_key="florist", city="lattes"))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Taxi Bleu", source="manual", sector_key="taxi", city="Mauguio", phone="0467000002"))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Garage Sud", source="manual", sector_key="garage", city="Lattes", phone="0467000003"))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Sans secteur", source="manual", city="Lattes"))
+    def listed_names(filters):
+        return sorted(row["name"] for row in prospect_repository.list_prospects(filters))
+    assert listed_names({"sector_key": ["restaurant", "florist", "taxi"]}) == ["Chez Paul", "Rose et Lys", "Taxi Bleu"]
+    assert listed_names({"sector_key": "restaurant,florist,taxi", "city": ["LATTES"]}) == ["Chez Paul", "Rose et Lys"]
+    assert listed_names({"sector_key": ["restaurant", "florist", "taxi"], "phone": "with"}) == ["Chez Paul", "Taxi Bleu"]
+    assert listed_names({"sector_key": ["unclassified"]}) == ["Sans secteur"]
+    prospect_repository._insert_prospect(ProspectCandidate(name="Site Mauguio", source="manual", city="Mauguio", website_url="https://site-mauguio.fr"))
+    assert listed_names({"opportunity_level": ["unscanned", "unknown_website"], "city": ["Mauguio"]}) == ["Site Mauguio", "Taxi Bleu"]
+    facets = prospect_repository.facets()
+    assert facets["sector_key"]["restaurant"] == 1 and facets["sector_key"]["unclassified"] == 2
+    assert facets["city"][0] == {"city": "Lattes", "total": 4} and facets["opportunity_level"]["unscanned"] == 1
+
+
+def test_bulk_update_and_delete_apply_to_the_selection_only():
+    first_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Un", source="manual"))
+    second_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Deux", source="manual"))
+    third_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Trois", source="manual"))
+    assert prospect_repository.update_prospects([first_identifier, second_identifier, 999], {"status": "to_call"}) == 2
+    assert prospect_repository.get_prospect(third_identifier)["status"] == "new"
+    assert prospect_repository.delete_prospects([first_identifier, 999]) == 1
+    assert [row["name"] for row in prospect_repository.list_prospects({"status": ["to_call"]})] == ["Deux"]

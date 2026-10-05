@@ -91,9 +91,19 @@ Ces corrections sont conservées lors des analyses suivantes. Un site qui refuse
 Le bouton **🔄 Analyser tous les prospects** relance tout en une tâche : recherche des sites manquants, réanalyse de toutes les fiches (nouveaux contacts, site refait, score à jour), puis fusion des doublons révélés (même téléphone ou même site trouvés entre-temps).
 
 ### La liste des prospects
-Cliquez sur un en-tête de colonne (score, entreprise, ville, effectif, téléphone, site, opportunité, statut, relance) pour trier, et cliquez à nouveau pour inverser l'ordre. L'effectif provient du registre officiel.
+**Filtres combinables.** Chaque bouton de la barre de filtres ouvre une liste à cases à cocher, avec le nombre de prospects derrière chaque valeur :
+- **Secteur** : cochez par exemple *Restaurants* + *Fleuristes* + *Taxis*. La recherche dans la liste accepte les mots-clés (« pizza », « avocat »…), et la case d'un groupe coche tout le groupe ;
+- **Ville**, **Opportunité**, **Statut**, **Source** : même principe ;
+- **📍 Autour de** : une ville ou une adresse et un rayon (1 à 50 km en un clic, ou une valeur libre). Une colonne **Distance** apparaît, triée du plus proche au plus loin. Les fiches sans coordonnées GPS sont gardées si leur ville correspond ;
+- **Plus de critères** : avec ou sans site, téléphone ou e-mail ; score minimum et maximum ; effectif minimum ; note Google minimum ; relance en retard, planifiée ou absente ; entreprise créée après une date.
 
-**Filtrer autour d'un lieu :** tapez une ville ou une adresse dans le champ « 📍 Autour de… », choisissez une suggestion et réglez le **Rayon** (5 km par défaut). Seuls les prospects situés dans ce rayon restent affichés, avec une colonne **Distance** triée du plus proche au plus loin. Les fiches sans coordonnées GPS sont conservées si leur ville correspond, et rangées en fin de liste. La croix ✕ retire le filtre. L'export CSV respecte le filtre et ajoute la distance.
+Plusieurs valeurs d'un même filtre s'additionnent (*restaurants **ou** fleuristes*), et les filtres différents se cumulent (*… **et** sans site **et** à moins de 5 km de Lattes*). Les filtres actifs s'affichent en étiquettes, retirables d'un clic, et sont conservés d'une session à l'autre. Les cartes de statistiques en haut de page servent de raccourcis.
+
+**⭐ Vues** enregistre la combinaison de filtres et le tri actuels sous un nom (ex. « Restaurants sans site à Lattes ») pour la retrouver en un clic.
+
+**▦ Colonnes** choisit les colonnes affichées : secteur, code postal, dirigeant, e-mail, note Google, date de création… Cliquez sur un en-tête pour trier, et cliquez à nouveau pour inverser l'ordre.
+
+**Sélection multiple.** Cochez des lignes pour faire apparaître la barre d'actions groupées : analyser, changer le statut, fusionner ou supprimer. Les actions sur toute la base sont rangées dans les menus **⚡ Analyser** et **🧰 Outils**, avec l'export CSV de la liste filtrée.
 
 ### La fiche prospect
 Dans **⚙️ Réglages → Fiche client**, cochez ce qui doit s'afficher : effectif recensé, coordonnées (téléphone, adresse, e-mail, site web), synthèse, diagnostic, script d'appel, e-mail, technique, historique.
