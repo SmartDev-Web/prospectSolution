@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prospect Solution</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🎯 Prospect Solution</div>
+    <nav class="tabs" id="main-tabs">
+      <button class="tab active" data-view="prospects">📋 Prospects</button>
+      <button class="tab" data-view="follow-ups">📞 À appeler <span class="pill" id="follow-up-count" hidden></span></button>
+      <button class="tab" data-view="open-data">🔎 Open Data</button>
+      <button class="tab" data-view="google-maps">🗺️ Google Maps</button>
+      <button class="tab" data-view="settings">⚙️ Réglages</button>
+    </nav>
+    <div class="connection-indicator" id="connection-indicator" title="Connexion temps réel">●</div>
+  </header>
+  <main>
+    <section class="view active" id="view-prospects">
+      <div class="stat-row" id="statistics"></div>
+      <div class="toolbar">
+        <input type="search" id="filter-search" placeholder="Rechercher un nom, une ville, un site…">
+        <select id="filter-sector"><option value="">Tous les secteurs</option></select>
+        <select id="filter-opportunity"></select>
+        <select id="filter-status"></select>
+        <select id="filter-website">
+          <option value="">Avec ou sans site</option>
+          <option value="with">Avec site</option>
+          <option value="without">Sans site</option>
+        </select>
+        <select id="filter-source">
+          <option value="">Toutes les sources</option>
+          <option value="government_registry">Registre INSEE</option>
+          <option value="openstreetmap">OpenStreetMap</option>
+          <option value="google_maps">Google Maps</option>
+        </select>
+        <select id="filter-sort">
+          <option value="opportunity">Tri : opportunité</option>
+          <option value="score">Tri : score croissant</option>
+          <option value="recent">Tri : plus récents</option>
+          <option value="name">Tri : nom</option>
+          <option value="follow_up">Tri : date de relance</option>
+        </select>
+      </div>
+      <div class="toolbar actions">
+        <span class="muted" id="prospect-count"></span>
+        <span class="spacer"></span>
+        <button class="button secondary" id="add-prospect-toggle">➕ Ajouter un prospect</button>
+        <button class="button secondary" id="scan-unscanned">⚡ Analyser les prospects non analysés</button>
+        <button class="button secondary" id="export-csv">⬇️ Exporter en CSV</button>
+      </div>
+      <form class="panel add-prospect-form" id="add-prospect-form" hidden>
+        <div class="field-grid">
+          <label>Nom de l'entreprise<input name="name" required></label>
+          <label>Site web<input name="website_url" placeholder="https://…"></label>
+          <label>Ville<input name="city"></label>
+          <label>Téléphone<input name="phone"></label>
+          <label>Secteur<select name="sector_key"><option value="">Autre</option></select></label>
+        </div>
+        <button class="button primary" type="submit">Ajouter et analyser</button>
+      </form>
+      <div class="table-wrapper">
+        <table class="prospect-table">
+          <thead>
+            <tr><th>Score</th><th>Entreprise</th><th>Ville</th><th>Téléphone</th><th>Site web</th><th>Opportunité</th><th>Statut</th><th>Relance</th><th></th></tr>
+          </thead>
+          <tbody id="prospect-rows"></tbody>
+        </table>
+        <div class="empty-state" id="prospects-empty" hidden>
+          <p>Aucun prospect pour l'instant.</p>
+          <p class="muted">Lancez une recherche dans l'onglet <strong>Open Data</strong> ou <strong>Google Maps</strong>.</p>
+        </div>
+      </div>
+    </section>
+    <section class="view" id="view-follow-ups">
+      <h2>À rappeler aujourd'hui</h2>
+      <div class="card-list" id="due-follow-ups"></div>
+      <h2>Prochains appels suggérés</h2>
+      <p class="muted">Prospects jamais contactés, classés par opportunité : sans site d'abord, puis les sites les plus mauvais.</p>
+      <div class="card-list" id="suggested-calls"></div>
+    </section>
+    <section class="view" id="view-open-data">
+      <div class="search-layout">
+        <form class="panel" id="open-data-form">
+          <h2>Recherche Open Data</h2>
+          <p class="muted">Registre officiel des entreprises (INSEE/Sirene) et OpenStreetMap. 100 % gratuit et légal. Les sites web manquants sont recherchés automatiquement.</p>
+          <div class="area-picker" data-area-picker="open-data"></div>
+          <fieldset>
+            <legend>Secteurs</legend>
+            <div class="sector-checkboxes" data-sector-checkboxes="open-data"></div>
+          </fieldset>
+          <label>Codes NAF supplémentaires <span class="muted">(séparés par des virgules, ex. 43.21A)</span>
+            <input type="text" name="custom_naf_codes" placeholder="43.21A, 43.22B">
+          </label>
+          <label>Entreprises créées après le <span class="muted">(idéal pour cibler les nouvelles entreprises sans site)</span>
+            <span class="inline-fields">
+              <input type="date" name="created_after">
+              <button type="button" class="button ghost" data-created-after-months="6">6 derniers mois</button>
+              <button type="button" class="button ghost" data-created-after-months="12">12 derniers mois</button>
+            </span>
+          </label>
+          <div class="option-grid">
+            <label class="checkbox"><input type="checkbox" name="use_government_registry" checked> Registre INSEE / Sirene</label>
+            <label class="checkbox"><input type="checkbox" name="use_openstreetmap" checked> OpenStreetMap</label>
+            <label class="checkbox"><input type="checkbox" name="discover_websites" checked> Chercher les sites web manquants</label>
+            <label class="checkbox"><input type="checkbox" name="exclude_large_companies" checked> Exclure les grandes entreprises</label>
+            <label class="checkbox"><input type="checkbox" name="auto_scan"> Analyser automatiquement ensuite</label>
+          </div>
+          <label>Nombre maximum d'établissements
+            <input type="number" name="max_results" value="500" min="1" max="5000">
+          </label>
+          <button class="button primary" type="submit">🚀 Lancer la recherche</button>
+        </form>
+        <div class="map-panel"><div class="map" data-map="open-data"></div></div>
+      </div>
+    </section>
+    <section class="view" id="view-google-maps">
+      <div class="search-layout">
+        <form class="panel" id="google-maps-form">
+          <h2>Recherche Google Maps</h2>
+          <div class="callout warning">
+            <strong>⚠️ À lire avant de lancer.</strong> Le scraping de Google Maps viole les conditions d'utilisation de Google. Le risque concret est un CAPTCHA ou un blocage temporaire de votre adresse IP (Google vous demandera des CAPTCHA pendant quelques heures, y compris dans vos recherches normales). Gardez des volumes raisonnables (quelques centaines de fiches par jour), laissez le mode visible activé pour pouvoir résoudre un CAPTCHA, et ne vous connectez jamais à votre compte Google dans ce navigateur.
+          </div>
+          <div class="area-picker" data-area-picker="google-maps"></div>
+          <fieldset>
+            <legend>Secteurs</legend>
+            <div class="sector-checkboxes" data-sector-checkboxes="google-maps"></div>
+          </fieldset>
+          <label>Recherches personnalisées <span class="muted">(une par ligne, ex. « plombier », « garage automobile »)</span>
+            <textarea name="custom_queries" rows="3"></textarea>
+          </label>
+          <label>Fiches maximum par recherche
+            <input type="number" name="max_results_per_query" value="40" min="1" max="200">
+          </label>
+          <div class="option-grid">
+            <label class="checkbox"><input type="checkbox" name="visible_browser" checked> Navigateur visible (recommandé)</label>
+            <label class="checkbox"><input type="checkbox" name="auto_scan"> Analyser automatiquement ensuite</label>
+          </div>
+          <button class="button primary" type="submit">🗺️ Lancer le scraping</button>
+        </form>
+        <div class="map-panel"><div class="map" data-map="google-maps"></div></div>
+      </div>
+    </section>
+    <section class="view" id="view-settings">
+      <form class="panel settings-form" id="settings-form">
+        <h2>Votre identité <span class="muted">(utilisée dans les scripts d'appel et les e-mails)</span></h2>
+        <div class="field-grid">
+          <label>Prénom<input name="freelancer_first_name"></label>
+          <label>Nom<input name="freelancer_last_name"></label>
+          <label>Nom commercial<input name="freelancer_company"></label>
+          <label>Ville<input name="freelancer_city"></label>
+          <label>Téléphone<input name="freelancer_phone"></label>
+          <label>E-mail<input name="freelancer_email" type="email"></label>
+          <label>Site web<input name="freelancer_website"></label>
+        </div>
+        <h2>Analyse des sites</h2>
+        <div class="field-grid">
+          <label>Analyses en parallèle<input name="scan_concurrency" type="number" min="1" max="8"></label>
+          <label class="checkbox"><input type="checkbox" name="lighthouse_enabled"> Audit Google Lighthouse <span class="muted" id="lighthouse-availability"></span></label>
+          <label class="checkbox"><input type="checkbox" name="website_discovery_use_search_engine"> Utiliser DuckDuckGo pour trouver les sites</label>
+        </div>
+        <h2>Google Maps</h2>
+        <div class="field-grid">
+          <label class="checkbox"><input type="checkbox" name="google_maps_headless"> Mode invisible par défaut</label>
+          <label>Pause minimale entre deux fiches (s)<input name="google_maps_pause_min_seconds" type="number" step="0.5" min="0.5"></label>
+          <label>Pause maximale entre deux fiches (s)<input name="google_maps_pause_max_seconds" type="number" step="0.5" min="1"></label>
+        </div>
+        <h2>Intelligence artificielle locale (Ollama)</h2>
+        <p class="muted">Sans IA, les fiches sont rédigées par un moteur de règles (fiable et instantané). Avec Ollama, le résumé, l'accroche et l'e-mail sont réécrits de façon plus naturelle, sur votre propre carte graphique, gratuitement.</p>
+        <div class="field-grid">
+          <label>Mode
+            <select name="llm_mode">
+              <option value="disabled">Désactivé (moteur de règles)</option>
+              <option value="managed">Lancé par l'application sur la carte choisie</option>
+              <option value="external">Serveur Ollama existant</option>
+            </select>
+          </label>
+          <label>Carte graphique dédiée<select name="llm_gpu_uuid" id="gpu-select"><option value="">Choix automatique d'Ollama</option></select></label>
+          <label>Modèle
+            <input name="llm_model" list="model-suggestions">
+            <datalist id="model-suggestions">
+              <option value="qwen2.5:7b-instruct">
+              <option value="mistral:7b-instruct">
+              <option value="llama3.1:8b">
+              <option value="gemma2:2b">
+            </datalist>
+          </label>
+          <label>Port du serveur géré<input name="llm_managed_port" type="number"></label>
+          <label>URL du serveur existant<input name="llm_external_url"></label>
+          <label>Exécutable Ollama<input name="ollama_executable"></label>
+        </div>
+        <div class="llm-status" id="llm-status"></div>
+        <div class="toolbar">
+          <button class="button secondary" type="button" id="llm-start">▶️ Démarrer Ollama</button>
+          <button class="button secondary" type="button" id="llm-stop">⏹️ Arrêter</button>
+          <button class="button secondary" type="button" id="llm-pull">⬇️ Télécharger le modèle</button>
+        </div>
+        <button class="button primary" type="submit">💾 Enregistrer</button>
+      </form>
+    </section>
+  </main>
+  <aside class="drawer" id="prospect-drawer" hidden>
+    <div class="drawer-content" id="prospect-detail"></div>
+  </aside>
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="jobs-panel" id="jobs-panel">
+    <button class="jobs-toggle" id="jobs-toggle">Tâches <span class="pill" id="running-job-count">0</span></button>
+    <div class="jobs-list" id="jobs-list"></div>
+  </aside>
+  <div class="toasts" id="toasts"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

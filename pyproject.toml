@@ -1,0 +1,8 @@
+[project]
+name = "prospect-solution"
+version = "1.0.0"
+description = "Local prospecting toolkit for freelance web developers"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
