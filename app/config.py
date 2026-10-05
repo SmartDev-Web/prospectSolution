@@ -9,6 +9,8 @@ SCREENSHOT_DIRECTORY = DATA_DIRECTORY / "screenshots"
 GOOGLE_MAPS_PROFILE_DIRECTORY = DATA_DIRECTORY / "google_maps_profile"
 GOOGLE_SEARCH_PROFILE_DIRECTORY = DATA_DIRECTORY / "google_search_profile"
 WEB_DIRECTORY = APPLICATION_ROOT / "web"
+# Contract version shared with web/js/version.js: a page and a server with different values come from different releases
+API_VERSION = 9
 SERVER_HOST = os.environ.get("PROSPECT_HOST", "127.0.0.1")
 SERVER_PORT = int(os.environ.get("PROSPECT_PORT", "8765"))
 # Browser-like identity used when visiting prospect websites

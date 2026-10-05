@@ -24,6 +24,7 @@
     <div class="sidebar-footer"><span class="connection-indicator" id="connection-indicator">●</span><span class="connection-label">Temps réel</span></div>
   </aside>
   <main class="content">
+    <div class="version-banner" id="version-banner" role="alert" hidden></div>
     <section class="view active" id="view-prospects">
       <header class="page-header">
         <div>
@@ -70,6 +71,7 @@
           <p><strong>Aucun prospect pour l'instant.</strong></p>
           <p class="muted">Lancez une recherche dans <strong>Open Data</strong> ou <strong>Google Maps</strong>.</p>
         </div>
+        <div class="empty-state" id="prospects-error" role="alert" hidden></div>
         <div class="empty-state" id="prospects-no-match" hidden>
           <div class="empty-icon">🧐</div>
           <p><strong>Aucun prospect ne correspond à ces filtres.</strong></p>

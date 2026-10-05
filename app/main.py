@@ -1,16 +1,19 @@
 """HTTP API, WebSocket event stream and static web interface."""
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.requests import Request as StarletteRequest
 
 from app.browser import browser_runtime
-from app.config import SCREENSHOT_DIRECTORY, WEB_DIRECTORY, ensure_data_directories
+from app.config import API_VERSION, SCREENSHOT_DIRECTORY, SERVER_HOST, SERVER_PORT, WEB_DIRECTORY, ensure_data_directories
 from app.database import get_database
 from app.events import event_bus
 from app.geo import geocode
@@ -60,6 +63,34 @@ async def application_lifespan(_application: FastAPI):
 
 
 application = FastAPI(title="Prospect Solution", lifespan=application_lifespan)
+# The API has no account system: it only answers pages served by itself, under the names of the local machine
+ALLOWED_HOST_NAMES = sorted({"127.0.0.1", "localhost", SERVER_HOST, *filter(None, os.environ.get("PROSPECT_ALLOWED_HOSTS", "").replace(" ", "").split(","))})
+ALLOWED_ORIGINS = {f"http://{host_name}:{SERVER_PORT}" for host_name in ALLOWED_HOST_NAMES}
+STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+INTERFACE_PATH_PREFIXES = ("/static/", "/screenshots/")
+
+
+def is_allowed_origin(origin: str | None) -> bool:
+    """Accept requests sent by the interface itself, or by a client that is not a browser (no Origin header)."""
+    return origin is None or origin in ALLOWED_ORIGINS
+
+
+@application.middleware("http")
+async def protect_local_interface(request: StarletteRequest, call_next) -> Response:
+    """Refuse cross-site state changes and make browsers revalidate the interface files after each update."""
+    if request.method in STATE_CHANGING_METHODS and not is_allowed_origin(request.headers.get("origin")):
+        return JSONResponse({"detail": "Requête refusée : origine non autorisée."}, status_code=403)
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith(INTERFACE_PATH_PREFIXES):
+        response.headers["Cache-Control"] = "no-cache"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
+
+# Registered last so that it runs first: a request addressed to another host name (DNS rebinding) never reaches the API
+application.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOST_NAMES)
 ensure_data_directories()
 application.mount("/static", StaticFiles(directory=WEB_DIRECTORY), name="static")
 application.mount("/screenshots", StaticFiles(directory=SCREENSHOT_DIRECTORY), name="screenshots")
@@ -76,6 +107,11 @@ def require_prospect(prospect_identifier: int) -> dict[str, Any]:
 @application.get("/")
 async def serve_interface() -> FileResponse:
     return FileResponse(WEB_DIRECTORY / "index.html")
+
+
+@application.get("/api/health")
+async def get_health() -> dict:
+    return {"api_version": API_VERSION}
 
 
 @application.get("/api/sectors")
@@ -211,9 +247,9 @@ async def merge_duplicate_prospects() -> dict:
     return {"merged": prospect_repository.merge_all_duplicates()}
 
 
-@application.post("/api/prospects/remove-chains")
-async def remove_chain_prospects() -> dict:
-    removed_names = prospect_repository.remove_chains(parse_custom_brands(load_settings()["custom_chain_brands"]))
+@application.post("/api/prospects/remove-off-target")
+async def remove_off_target_prospects() -> dict:
+    removed_names = prospect_repository.remove_off_target_prospects(parse_custom_brands(load_settings()["custom_chain_brands"]))
     return {"removed": len(removed_names), "names": removed_names}
 
 
@@ -233,7 +269,7 @@ async def mark_prospect_as_chain(prospect_identifier: int, mark_chain_request: M
     if normalize_company_name(brand_line) not in parse_custom_brands(custom_brands_text):
         custom_brands_text = "\n".join(line for line in (custom_brands_text.strip(), brand_line) if line)
         save_settings({"custom_chain_brands": custom_brands_text})
-    removed_names = prospect_repository.remove_chains(parse_custom_brands(custom_brands_text))
+    removed_names = prospect_repository.remove_off_target_prospects(parse_custom_brands(custom_brands_text))
     if prospect_repository.get_prospect(prospect_identifier):
         # The typed brand may not appear in this prospect's names: the user's decision still applies to it
         removed_names.append(prospect_repository.get_prospect(prospect_identifier)["name"])
@@ -337,7 +373,10 @@ async def get_settings() -> dict:
 
 @application.put("/api/settings")
 async def update_settings(changes: dict[str, Any]) -> dict:
-    return save_settings(changes)
+    try:
+        return save_settings(changes)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @application.get("/api/system")
@@ -380,6 +419,9 @@ async def pull_language_model() -> dict:
 
 @application.websocket("/ws")
 async def stream_events(websocket: WebSocket) -> None:
+    if not is_allowed_origin(websocket.headers.get("origin")):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     subscriber_queue = event_bus.subscribe()
     try:

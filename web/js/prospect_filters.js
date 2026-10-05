@@ -42,6 +42,10 @@ function createDefaultFilterState() {
 
 export const filterState = createDefaultFilterState();
 
+function isScalarFilterValue(value) {
+  return typeof value === "string" || typeof value === "number";
+}
+
 // Each multiple choice filter lists its options with the number of prospects behind each value
 const MULTI_CHOICE_FILTERS = [
   {
@@ -117,8 +121,8 @@ function applyFilterValues(filterValues) {
   const defaults = createDefaultFilterState();
   for (const filterKey of Object.keys(defaults)) {
     if (filterKey === "area") filterState.area = { ...defaults.area, ...(filterValues.area || {}) };
-    else if (Array.isArray(defaults[filterKey])) filterState[filterKey] = Array.isArray(filterValues[filterKey]) ? [...filterValues[filterKey]] : [];
-    else filterState[filterKey] = filterValues[filterKey] ?? defaults[filterKey];
+    else if (Array.isArray(defaults[filterKey])) filterState[filterKey] = Array.isArray(filterValues[filterKey]) ? filterValues[filterKey].filter(isScalarFilterValue).map(String) : [];
+    else filterState[filterKey] = isScalarFilterValue(filterValues[filterKey]) ? String(filterValues[filterKey]) : defaults[filterKey];
   }
 }
 

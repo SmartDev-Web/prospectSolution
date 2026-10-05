@@ -32,6 +32,8 @@ class OllamaService:
         self._last_error: str | None = None
         self._inference_device: str | None = None
         self._recent_log_lines: list[str] = []
+        # A local model answers one prompt at a time: queued prompts wait here instead of timing out inside the server
+        self._generation_slot = asyncio.Semaphore(1)
 
     def base_url(self) -> str:
         """Return the URL of the Ollama server selected in the settings."""
@@ -174,7 +176,7 @@ class OllamaService:
             "options": {"temperature": 0.3, "num_ctx": 4096},
             "messages": [{"role": "system", "content": system_prompt}, user_message],
         }
-        async with httpx.AsyncClient(timeout=httpx.Timeout(GENERATION_TIMEOUT_SECONDS, connect=10.0)) as client:
+        async with self._generation_slot, httpx.AsyncClient(timeout=httpx.Timeout(GENERATION_TIMEOUT_SECONDS, connect=10.0)) as client:
             response = await client.post(f"{self.base_url()}/api/chat", json=request_body)
             response.raise_for_status()
         return json.loads(response.json()["message"]["content"])

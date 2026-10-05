@@ -227,7 +227,7 @@ legend { font-weight: 600; padding: 0 6px; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
 
 /* Statistics */
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .stat-card {
   display: flex;
   flex-direction: column;
@@ -245,6 +245,11 @@ legend { font-weight: 600; padding: 0 6px; }
   box-shadow: var(--shadow-small);
   transition: transform 0.15s, box-shadow 0.15s;
 }
+.version-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 16px; padding: 12px 16px;
+  border: 1px solid var(--color-warning-border); border-radius: var(--radius); background: var(--color-warning-background); color: var(--color-text);
+}
+.version-banner[hidden] { display: none; }
 .stat-card:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
 .stat-card.tone-hot { border-left-color: var(--color-hot); }
 .stat-card.tone-warm { border-left-color: var(--color-warm); }

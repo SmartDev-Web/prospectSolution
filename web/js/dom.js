@@ -1,4 +1,8 @@
 // DOM creation helpers and shared formatting functions.
+// Link targets coming from scraped data are only rendered when they are web, mail, phone or local addresses
+const SAFE_LINK_PATTERN = /^(https?:|mailto:|tel:|\/(?!\/)|#)/i;
+const LINK_ATTRIBUTES = new Set(["href", "src", "action", "formaction"]);
+
 export function createElement(tagName, attributes = {}, children = []) {
   const element = document.createElement(tagName);
   for (const [attributeName, attributeValue] of Object.entries(attributes)) {
@@ -7,6 +11,7 @@ export function createElement(tagName, attributes = {}, children = []) {
     else if (attributeName === "text") element.textContent = attributeValue;
     else if (attributeName.startsWith("on") && typeof attributeValue === "function") element.addEventListener(attributeName.slice(2).toLowerCase(), attributeValue);
     else if (attributeName === "dataset") Object.assign(element.dataset, attributeValue);
+    else if (LINK_ATTRIBUTES.has(attributeName) && !SAFE_LINK_PATTERN.test(String(attributeValue).trim())) continue;
     else if (attributeValue === true) element.setAttribute(attributeName, "");
     else element.setAttribute(attributeName, attributeValue);
   }

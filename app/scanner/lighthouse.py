@@ -3,13 +3,24 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+from urllib.parse import urlparse
 
 from app.browser import browser_runtime
 
 logger = logging.getLogger(__name__)
 LIGHTHOUSE_TIMEOUT_SECONDS = 120
 LIGHTHOUSE_CATEGORIES = ("performance", "accessibility", "seo", "best-practices")
+# On Windows the npm launcher is a .cmd script interpreted by cmd.exe: only characters without meaning for the shell are passed
+SHELL_SAFE_URL_PATTERN = re.compile(r"https?://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?")
+
+
+def build_shell_safe_target(url: str) -> str | None:
+    """Reduce a URL to scheme, host and path, or return None when it still contains characters a shell would interpret."""
+    parsed_url = urlparse(url)
+    reduced_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path or '/'}"
+    return reduced_url if SHELL_SAFE_URL_PATTERN.fullmatch(reduced_url) else None
 
 
 def find_lighthouse_executable() -> str | None:
@@ -20,7 +31,8 @@ def find_lighthouse_executable() -> str | None:
 async def run_lighthouse(url: str) -> dict[str, int] | None:
     """Run a mobile Lighthouse audit and return category scores out of 100."""
     lighthouse_executable = find_lighthouse_executable()
-    if lighthouse_executable is None:
+    target_url = build_shell_safe_target(url)
+    if lighthouse_executable is None or target_url is None:
         return None
     await browser_runtime.get_playwright()
     environment_variables = dict(os.environ)
@@ -28,7 +40,7 @@ async def run_lighthouse(url: str) -> dict[str, int] | None:
     if chromium_path:
         environment_variables["CHROME_PATH"] = chromium_path
     process = await asyncio.create_subprocess_exec(
-        lighthouse_executable, url, "--output=json", "--output-path=stdout", "--quiet",
+        lighthouse_executable, target_url, "--output=json", "--output-path=stdout", "--quiet",
         f"--only-categories={','.join(LIGHTHOUSE_CATEGORIES)}", "--chrome-flags=--headless=new --no-sandbox",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

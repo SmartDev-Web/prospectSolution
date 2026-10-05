@@ -36,8 +36,11 @@ def normalize_company_name(name: str) -> str:
 
 def company_name_similarity(first_name: str, second_name: str) -> float:
     """Score how likely two business names designate the same company (0 to 1)."""
-    first_normalized = normalize_company_name(first_name)
-    second_normalized = normalize_company_name(second_name)
+    return normalized_name_similarity(normalize_company_name(first_name), normalize_company_name(second_name))
+
+
+def normalized_name_similarity(first_normalized: str, second_normalized: str, minimum_useful_score: float = 0.0) -> float:
+    """Compare two already normalized names; scores that cannot reach the useful minimum are returned as 0 without full computation."""
     if not first_normalized or not second_normalized:
         return 0.0
     if first_normalized == second_normalized:
@@ -45,7 +48,11 @@ def company_name_similarity(first_name: str, second_name: str) -> float:
     shorter_name, longer_name = sorted((first_normalized, second_normalized), key=len)
     if len(shorter_name) >= 5 and f" {shorter_name} " in f" {longer_name} ":
         return 0.9
-    return SequenceMatcher(None, first_normalized, second_normalized).ratio()
+    sequence_matcher = SequenceMatcher(None, first_normalized, second_normalized)
+    # The quick ratios are upper bounds of the real ratio: most unrelated pairs stop here
+    if sequence_matcher.real_quick_ratio() < minimum_useful_score or sequence_matcher.quick_ratio() < minimum_useful_score:
+        return 0.0
+    return sequence_matcher.ratio()
 
 
 def format_place_name(place_name: str | None) -> str | None:
@@ -86,14 +93,17 @@ def extract_domain(url: str | None) -> str | None:
 
 
 def normalize_website_url(url: str | None) -> str | None:
-    """Ensure a website URL carries a scheme and no surrounding whitespace."""
+    """Return a web address with an http or https scheme, or None for anything else (javascript:, file:, mailto:…)."""
     if not url:
         return None
     cleaned_url = url.strip()
     if not cleaned_url:
         return None
-    if "://" not in cleaned_url:
+    if "://" not in cleaned_url and not cleaned_url.lower().startswith(("javascript:", "data:", "vbscript:", "file:", "mailto:", "tel:")):
         cleaned_url = f"http://{cleaned_url}"
+    parsed_url = urlparse(cleaned_url)
+    if parsed_url.scheme.lower() not in ("http", "https") or not parsed_url.hostname or any(character.isspace() for character in cleaned_url):
+        return None
     return cleaned_url
 
 

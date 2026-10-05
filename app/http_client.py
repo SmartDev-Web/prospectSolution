@@ -24,6 +24,10 @@ class RequestPacer:
         self._lock = asyncio.Lock()
         self._last_request_time = 0.0
 
+    def seconds_until_ready(self) -> float:
+        """Return how long the next request would have to wait, ignoring jitter."""
+        return max(0.0, self._minimum_interval_seconds - (time.monotonic() - self._last_request_time))
+
     async def wait_turn(self) -> None:
         """Wait until the service's rate limit allows the next request."""
         async with self._lock:

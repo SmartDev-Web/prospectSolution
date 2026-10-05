@@ -6,7 +6,6 @@ from typing import Callable
 
 import httpx
 
-from app.config import BROWSER_USER_AGENT
 from app.sources.search_engines import SearchEngineRouter
 from app.sources.website_verification import (
     GENERIC_NAME_WORDS,
@@ -20,6 +19,7 @@ from app.sources.website_verification import (
     website_root,
 )
 from app.text_utils import extract_domain, slugify, tokenize_company_name
+from app.web_safety import create_public_web_client, fetch_page_text
 
 logger = logging.getLogger(__name__)
 CANDIDATE_TOP_LEVEL_DOMAINS = ("fr", "com", "eu", "net", "org", "info")
@@ -89,23 +89,17 @@ async def fetch_page(client: httpx.AsyncClient, url: str) -> ParsedPage | None:
     if not url.startswith(("http://", "https://")):
         return None
     try:
-        response = await client.get(url)
+        fetched_page = await fetch_page_text(client, url)
     except (httpx.HTTPError, httpx.InvalidURL, UnicodeError, ValueError):
         return None
-    if response.status_code >= 400 or "html" not in response.headers.get("content-type", ""):
+    if fetched_page.status_code >= 400 or "html" not in fetched_page.content_type:
         return None
-    return parse_page(str(response.url), response.text)
+    return parse_page(fetched_page.url, fetched_page.text)
 
 
 def create_website_client() -> httpx.AsyncClient:
     """Create the HTTP client used to probe candidate websites."""
-    return httpx.AsyncClient(
-        timeout=httpx.Timeout(12.0),
-        follow_redirects=True,
-        headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9"},
-        verify=False,
-        transport=httpx.AsyncHTTPTransport(retries=2, verify=False),
-    )
+    return create_public_web_client(12.0, verify_certificates=False)
 
 
 def better_discovery(first: WebsiteDiscovery | None, second: WebsiteDiscovery | None) -> WebsiteDiscovery | None:
@@ -141,9 +135,12 @@ class WebsiteFinder:
         """Try domains derived from the business name, resolving them all in parallel."""
         domain_candidates = build_domain_candidates(identity)
         resolution_results = await asyncio.gather(*(domain_resolves(domain_name) for domain_name in domain_candidates))
+        resolving_domains = [domain_name for domain_name, resolves in zip(domain_candidates, resolution_results) if resolves]
+        async def verify_domain(domain_name: str) -> tuple[PageEvidence, str] | None:
+            return await self.verify_site(f"https://{domain_name}", identity, False) or await self.verify_site(f"http://{domain_name}", identity, False)
+        verifications = await asyncio.gather(*(verify_domain(domain_name) for domain_name in resolving_domains))
         best_discovery: WebsiteDiscovery | None = None
-        for domain_name in [domain_name for domain_name, resolves in zip(domain_candidates, resolution_results) if resolves]:
-            verification = await self.verify_site(f"https://{domain_name}", identity, False) or await self.verify_site(f"http://{domain_name}", identity, False)
+        for verification in verifications:
             if verification is None or verification[0].confidence is None:
                 continue
             if verification[0].confidence == "medium" and not verification[0].full_name_in_domain:
@@ -152,8 +149,6 @@ class WebsiteFinder:
             evidence, root_url = verification
             discovery = WebsiteDiscovery(website_url=root_url, origin="domain_guess", confidence=evidence.confidence, evidence=evidence.reasons, score=evidence.score)
             best_discovery = better_discovery(best_discovery, discovery)
-            if evidence.confidence == "high":
-                break
         return best_discovery
 
     async def discover_by_search(self, identity: BusinessIdentity) -> WebsiteDiscovery:
@@ -164,7 +159,7 @@ class WebsiteFinder:
             if not self._search_router.has_available_engine:
                 break
             result_urls, engine_key = await self._search_router.search(self._client, query)
-            best_discovery: WebsiteDiscovery | None = None
+            roots_to_verify: list[str] = []
             for result_url in result_urls:
                 if is_social_url(result_url):
                     social_url = social_url or result_url
@@ -173,14 +168,15 @@ class WebsiteFinder:
                 if is_directory_url(result_url) or root_url in checked_roots or len(checked_roots) >= MAXIMUM_SEARCH_RESULTS_CHECKED:
                     continue
                 checked_roots.add(root_url)
-                verification = await self.verify_site(root_url, identity, True)
+                roots_to_verify.append(root_url)
+            verifications = await asyncio.gather(*(self.verify_site(root_url, identity, True) for root_url in roots_to_verify))
+            best_discovery: WebsiteDiscovery | None = None
+            for verification in verifications:
                 if verification and verification[0].confidence:
                     evidence, verified_root = verification
                     best_discovery = better_discovery(best_discovery, WebsiteDiscovery(
                         website_url=verified_root, origin=engine_key, confidence=evidence.confidence, evidence=evidence.reasons, score=evidence.score,
                     ))
-                    if evidence.confidence == "high":
-                        break
             if best_discovery:
                 best_discovery.social_url = social_url
                 return best_discovery

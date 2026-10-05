@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.config import BROWSER_USER_AGENT
+from app.web_safety import create_public_web_client, fetch_page_text
 
 REQUEST_TIMEOUT_SECONDS = 20.0
 CONNECTION_RETRIES = 2
@@ -42,17 +42,11 @@ class CertificateInfo:
 
 def build_http_client(verify_certificates: bool) -> httpx.AsyncClient:
     """Create the client used to probe websites like a regular browser."""
-    return httpx.AsyncClient(
-        timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS),
-        follow_redirects=True,
-        verify=verify_certificates,
-        transport=httpx.AsyncHTTPTransport(retries=CONNECTION_RETRIES, verify=verify_certificates),
-        headers={
-            "User-Agent": BROWSER_USER_AGENT,
-            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.6",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Upgrade-Insecure-Requests": "1",
-        },
+    return create_public_web_client(
+        REQUEST_TIMEOUT_SECONDS,
+        verify_certificates,
+        {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8", "Upgrade-Insecure-Requests": "1"},
+        CONNECTION_RETRIES,
     )
 
 
@@ -62,7 +56,7 @@ async def fetch_homepage(url: str) -> HttpProbeResult:
     for verify_certificates in (True, False):
         try:
             async with build_http_client(verify_certificates) as client:
-                response = await client.get(url)
+                fetched_page = await fetch_page_text(client, url)
         except httpx.ConnectError as error:
             certificate_failure = isinstance(error.__cause__, ssl.SSLError) or "CERTIFICATE" in str(error).upper()
             if verify_certificates and certificate_failure:
@@ -76,13 +70,13 @@ async def fetch_homepage(url: str) -> HttpProbeResult:
         except httpx.HTTPError as error:
             probe_result.error = f"erreur HTTP ({type(error).__name__})"
             return probe_result
-        probe_result.final_url = str(response.url)
-        probe_result.status_code = response.status_code
-        probe_result.html = response.text if "html" in response.headers.get("content-type", "html") else ""
-        probe_result.redirect_chain = [str(history_response.url) for history_response in response.history]
-        probe_result.elapsed_milliseconds = int(response.elapsed.total_seconds() * 1000)
-        if response.status_code >= 400:
-            probe_result.error = f"code HTTP {response.status_code}"
+        probe_result.final_url = fetched_page.url
+        probe_result.status_code = fetched_page.status_code
+        probe_result.html = fetched_page.text if "html" in (fetched_page.content_type or "html") else ""
+        probe_result.redirect_chain = fetched_page.redirect_urls
+        probe_result.elapsed_milliseconds = fetched_page.elapsed_milliseconds
+        if fetched_page.status_code >= 400:
+            probe_result.error = f"code HTTP {fetched_page.status_code}"
         return probe_result
     probe_result.error = probe_result.error or "connexion impossible"
     return probe_result
@@ -91,11 +85,11 @@ async def fetch_homepage(url: str) -> HttpProbeResult:
 async def check_http_redirect(host_name: str) -> bool | None:
     """Tell whether the plain HTTP version of a host redirects to HTTPS."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), follow_redirects=True, headers={"User-Agent": BROWSER_USER_AGENT}, transport=httpx.AsyncHTTPTransport(retries=CONNECTION_RETRIES)) as client:
-            response = await client.get(f"http://{host_name}/")
+        async with create_public_web_client(10.0, retries=CONNECTION_RETRIES) as client:
+            async with client.stream("GET", f"http://{host_name}/") as response:
+                return str(response.url).startswith("https://")
     except httpx.HTTPError:
         return None
-    return str(response.url).startswith("https://")
 
 
 def read_certificate_blocking(host_name: str, port: int = 443) -> CertificateInfo:

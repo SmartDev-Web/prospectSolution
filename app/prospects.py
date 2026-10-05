@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any
 
 from app.chains import detect_chain
+from app.relevance import find_non_business_reason
 from app.database import get_database, utc_now_iso
 from app.deduplication import SAME_PHONE_SIMILARITY, find_duplicate_groups
 from app.events import event_bus
@@ -33,6 +34,11 @@ STATUS_RANK_SQL = (
     "CASE status WHEN 'new' THEN 0 WHEN 'to_call' THEN 1 WHEN 'called_no_answer' THEN 2 WHEN 'callback' THEN 3 WHEN 'interested' THEN 4 "
     "WHEN 'meeting' THEN 5 WHEN 'quote_sent' THEN 6 WHEN 'won' THEN 7 WHEN 'lost' THEN 8 WHEN 'not_interested' THEN 9 END"
 )
+FORMULA_TRIGGER_CHARACTERS = ("=", "+", "-", "@", "\t", "\r")
+# Columns rendered as clickable links: anything other than an http or https address is dropped before storage
+LINK_COLUMNS = ("website_url", "social_url", "google_maps_url")
+# Pipeline outcomes after which no follow-up call is expected
+CLOSED_STATUSES_SQL = "('won', 'lost', 'not_interested')"
 # Sort key: (SQL expression, natural direction); empty values always come last
 SORTABLE_COLUMNS = {
     "opportunity": (OPPORTUNITY_RANK_SQL, "ASC"),
@@ -138,8 +144,11 @@ def build_filter_conditions(filters: dict[str, Any], today: str) -> tuple[list[s
             conditions.append(f"{column_name} {operator} :{filter_name}")
             parameters[filter_name] = bound
     follow_up = filters.get("follow_up")
-    if follow_up in ("due", "planned"):
-        conditions.append(f"next_follow_up IS NOT NULL AND next_follow_up {'<=' if follow_up == 'due' else '>'} :today")
+    if follow_up == "due":
+        conditions.append(f"next_follow_up IS NOT NULL AND next_follow_up <= :today AND status NOT IN {CLOSED_STATUSES_SQL}")
+        parameters["today"] = today
+    elif follow_up == "planned":
+        conditions.append("next_follow_up IS NOT NULL AND next_follow_up > :today")
         parameters["today"] = today
     elif follow_up == "none":
         conditions.append("next_follow_up IS NULL")
@@ -209,6 +218,21 @@ def distance_to_row_km(candidate: ProspectCandidate, prospect_row: dict[str, Any
     if None in (candidate.latitude, candidate.longitude, prospect_row["latitude"], prospect_row["longitude"]):
         return None
     return haversine_distance_km(candidate.latitude, candidate.longitude, prospect_row["latitude"], prospect_row["longitude"])
+
+
+def neutralize_spreadsheet_formula(value: Any) -> Any:
+    """Prefix text that a spreadsheet would run as a formula, since names and notes come from scraped sources."""
+    if isinstance(value, str) and value[:1] in FORMULA_TRIGGER_CHARACTERS:
+        return f"'{value}"
+    return value
+
+
+def sanitize_link_columns(values: dict[str, Any]) -> dict[str, Any]:
+    """Keep only web addresses in link columns, so that scraped data can never inject a script link into the interface."""
+    for column_name in LINK_COLUMNS:
+        if values.get(column_name):
+            values[column_name] = normalize_website_url(values[column_name])
+    return values
 
 
 class ProspectRepository:
@@ -284,6 +308,7 @@ class ProspectRepository:
             "created_at": current_time,
             "updated_at": current_time,
         })
+        sanitize_link_columns(values)
         column_names = ", ".join(values)
         placeholders = ", ".join(f":{column_name}" for column_name in values)
         cursor = get_database().execute(f"INSERT INTO prospects ({column_names}) VALUES ({placeholders})", values)
@@ -309,6 +334,7 @@ class ProspectRepository:
             self._write_changes(existing_row["id"], changes)
 
     def _write_changes(self, prospect_identifier: int, changes: dict[str, Any]) -> None:
+        sanitize_link_columns(changes)
         changes["updated_at"] = utc_now_iso()
         assignments = ", ".join(f"{column_name} = :{column_name}" for column_name in changes)
         get_database().execute(f"UPDATE prospects SET {assignments} WHERE id = :identifier", {**changes, "identifier": prospect_identifier})
@@ -394,7 +420,7 @@ class ProspectRepository:
     def list_ids_without_phone(self, limit: int) -> list[int]:
         """Return prospects with no phone number never looked up on Google Maps, best opportunities first."""
         rows = get_database().fetch_all(
-            f"SELECT id FROM prospects WHERE phone IS NULL AND google_maps_checked = 0 AND sources NOT LIKE '%google_maps%' ORDER BY {build_order_clause('opportunity', None)} LIMIT ?",
+            f"SELECT id FROM prospects WHERE (phone IS NULL OR phone = '') AND google_maps_checked = 0 AND sources NOT LIKE '%google_maps%' ORDER BY {build_order_clause('opportunity', None)} LIMIT ?",
             (limit,),
         )
         return [row["id"] for row in rows]
@@ -463,12 +489,12 @@ class ProspectRepository:
             "website_check_done": 1,
         })
 
-    def remove_chains(self, custom_brands: list[str] | None = None) -> list[str]:
-        """Delete every prospect recognised as a chain or franchise and return their names."""
+    def remove_off_target_prospects(self, custom_brands: list[str] | None = None) -> list[str]:
+        """Delete every prospect recognised as a chain, a franchise or a place that is not a business, and return their names."""
         removed_names = []
-        for prospect_row in get_database().fetch_all("SELECT * FROM prospects"):
+        for prospect_row in get_database().fetch_all("SELECT id, name, legal_name, website_url, brand, establishment_count, category_label FROM prospects"):
             names = [name for name in (prospect_row["name"], prospect_row["legal_name"]) if name]
-            if detect_chain(names, prospect_row["website_url"], prospect_row["brand"], prospect_row["establishment_count"], custom_brands):
+            if find_non_business_reason(names, prospect_row["category_label"]) or detect_chain(names, prospect_row["website_url"], prospect_row["brand"], prospect_row["establishment_count"], custom_brands):
                 get_database().execute("DELETE FROM prospects WHERE id = ?", (prospect_row["id"],))
                 removed_names.append(prospect_row["name"])
         if removed_names:
@@ -484,6 +510,10 @@ class ProspectRepository:
                 changes[field_name] = field_value
         self._write_changes(prospect_identifier, changes)
         event_bus.publish("prospect.updated", self.get_prospect(prospect_identifier))
+
+    def list_google_place_keys(self) -> set[str]:
+        """Return the Google identifiers of the places already stored."""
+        return {row["google_place_key"] for row in get_database().fetch_all("SELECT google_place_key FROM prospects WHERE google_place_key IS NOT NULL")}
 
     def get_prospect(self, prospect_identifier: int) -> dict[str, Any] | None:
         """Return a single prospect row."""
@@ -514,9 +544,9 @@ class ProspectRepository:
     def list_due_follow_ups(self, until_date: str) -> list[dict[str, Any]]:
         """Return prospects whose follow-up date is due, plus fresh hot prospects to call."""
         return get_database().fetch_all(
-            """
+            f"""
             SELECT * FROM prospects
-            WHERE (next_follow_up IS NOT NULL AND next_follow_up <= :until_date AND status NOT IN ('won', 'lost', 'not_interested'))
+            WHERE (next_follow_up IS NOT NULL AND next_follow_up <= :until_date AND status NOT IN {CLOSED_STATUSES_SQL})
             ORDER BY next_follow_up ASC, id ASC
             """,
             {"until_date": until_date},
@@ -571,7 +601,7 @@ class ProspectRepository:
         csv_writer = csv.DictWriter(output_buffer, fieldnames=CSV_COLUMNS, delimiter=";", extrasaction="ignore")
         csv_writer.writeheader()
         for prospect_row in self.list_prospects(filters):
-            csv_writer.writerow({column_name: prospect_row.get(column_name) for column_name in CSV_COLUMNS})
+            csv_writer.writerow({column_name: neutralize_spreadsheet_formula(prospect_row.get(column_name)) for column_name in CSV_COLUMNS})
         return "﻿" + output_buffer.getvalue()
 
     def facets(self) -> dict[str, Any]:
@@ -614,9 +644,19 @@ class ProspectRepository:
         database = get_database()
         status_rows = database.fetch_all("SELECT status, COUNT(*) AS total FROM prospects GROUP BY status")
         opportunity_rows = database.fetch_all("SELECT COALESCE(opportunity_level, 'unscanned') AS level, COUNT(*) AS total FROM prospects GROUP BY level")
-        total_row = database.fetch_one("SELECT COUNT(*) AS total FROM prospects")
+        counter_row = database.fetch_one(
+            f"""
+            SELECT COUNT(*) AS total,
+                   COALESCE(SUM(phone IS NULL OR phone = ''), 0) AS without_phone,
+                   COALESCE(SUM(next_follow_up IS NOT NULL AND next_follow_up <= :today AND status NOT IN {CLOSED_STATUSES_SQL}), 0) AS follow_ups_due
+            FROM prospects
+            """,
+            {"today": date.today().isoformat()},
+        )
         return {
-            "total": total_row["total"],
+            "total": counter_row["total"],
+            "without_phone": counter_row["without_phone"],
+            "follow_ups_due": counter_row["follow_ups_due"],
             "by_status": {row["status"]: row["total"] for row in status_rows},
             "by_opportunity": {row["level"]: row["total"] for row in opportunity_rows},
         }

@@ -3,7 +3,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.geo import haversine_distance_km
-from app.text_utils import company_name_similarity
+from app.text_utils import normalize_company_name, normalized_name_similarity
 
 SAME_PLACE_DISTANCE_KM = 0.25
 SAME_PLACE_SIMILARITY = 0.78
@@ -11,15 +11,25 @@ SAME_POSTAL_CODE_SIMILARITY = 0.9
 SAME_DOMAIN_DISTANCE_KM = 2.0
 SAME_PHONE_SIMILARITY = 0.5
 GRID_CELL_DEGREES = 0.01
+# Below this similarity no name based rule can match, so the exact comparison is skipped
+MINIMUM_USEFUL_SIMILARITY = min(SAME_PLACE_SIMILARITY, SAME_POSTAL_CODE_SIMILARITY, SAME_PHONE_SIMILARITY)
+NORMALIZED_NAMES_KEY = "_normalized_names"
+MINIMUM_TOKEN_LENGTH = 2
 
 
-def row_names(prospect_row: dict[str, Any]) -> list[str]:
-    return [name for name in (prospect_row.get("name"), prospect_row.get("legal_name")) if name]
+def normalized_row_names(prospect_row: dict[str, Any]) -> list[str]:
+    """Return the normalized names of a prospect, computed once per row."""
+    if NORMALIZED_NAMES_KEY not in prospect_row:
+        prospect_row[NORMALIZED_NAMES_KEY] = [normalize_company_name(name) for name in (prospect_row.get("name"), prospect_row.get("legal_name")) if name]
+    return prospect_row[NORMALIZED_NAMES_KEY]
 
 
 def name_similarity(first_row: dict[str, Any], second_row: dict[str, Any]) -> float:
     """Return the highest similarity between the names of two prospects."""
-    return max((company_name_similarity(first_name, second_name) for first_name in row_names(first_row) for second_name in row_names(second_row)), default=0.0)
+    return max(
+        (normalized_name_similarity(first_name, second_name, MINIMUM_USEFUL_SIMILARITY) for first_name in normalized_row_names(first_row) for second_name in normalized_row_names(second_row)),
+        default=0.0,
+    )
 
 
 def distance_between_km(first_row: dict[str, Any], second_row: dict[str, Any]) -> float | None:
@@ -48,16 +58,31 @@ def rows_describe_same_business(first_row: dict[str, Any], second_row: dict[str,
     return bool(same_postal_code) and similarity >= SAME_POSTAL_CODE_SIMILARITY
 
 
+def name_tokens(prospect_row: dict[str, Any]) -> set[str]:
+    """Return the distinctive words of a prospect's names."""
+    return {token for normalized_name in normalized_row_names(prospect_row) for token in normalized_name.split() if len(token) >= MINIMUM_TOKEN_LENGTH}
+
+
 def blocking_keys(prospect_row: dict[str, Any]) -> list[str]:
-    """Return the buckets a prospect belongs to, so that only plausible pairs are compared."""
-    keys = [f"{key_name}:{prospect_row[key_name]}" for key_name in ("google_place_key", "website_domain", "phone", "postal_code") if prospect_row.get(key_name)]
+    """Return the buckets a prospect belongs to, so that only plausible pairs are compared.
+
+    Rules based on the name need a high similarity, which implies a shared word: postal code and
+    neighbourhood buckets are therefore split by name word, which keeps every bucket small.
+    """
+    keys = [f"{key_name}:{prospect_row[key_name]}" for key_name in ("google_place_key", "website_domain", "phone") if prospect_row.get(key_name)]
     if prospect_row.get("siret"):
         keys.append(f"siren:{prospect_row['siret'][:9]}")
+    tokens = name_tokens(prospect_row)
+    if prospect_row.get("postal_code"):
+        keys += [f"postal:{prospect_row['postal_code']}:{token}" for token in tokens]
     if prospect_row.get("latitude") is not None and prospect_row.get("longitude") is not None:
         cell_latitude = int(prospect_row["latitude"] // GRID_CELL_DEGREES)
         cell_longitude = int(prospect_row["longitude"] // GRID_CELL_DEGREES)
         # A business near a cell border is also compared with the neighbouring cells
-        keys += [f"cell:{cell_latitude + latitude_offset}:{cell_longitude + longitude_offset}" for latitude_offset in (-1, 0, 1) for longitude_offset in (-1, 0, 1)]
+        keys += [
+            f"cell:{cell_latitude + latitude_offset}:{cell_longitude + longitude_offset}:{token}"
+            for latitude_offset in (-1, 0, 1) for longitude_offset in (-1, 0, 1) for token in tokens
+        ]
     return keys
 
 

@@ -46,7 +46,11 @@ Commencez par l'onglet **⚙️ Réglages** : renseignez votre prénom, votre vi
 
 **Une chaîne passe entre les mailles ?** Dans sa fiche, le bouton **🏬 C'est une chaîne** demande le nom de l'enseigne (Kiabi par exemple), supprime tous les prospects qui la portent et l'ajoute à la liste des enseignes exclues des prochaines recherches. Cette liste se modifie aussi dans **⚙️ Réglages → Chaînes et franchises**.
 
-**Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 390 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le bouton **🧹 Retirer les chaînes** nettoie une base existante.
+**Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 390 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le menu **🧰 Outils → Retirer les chaînes et lieux hors cible** nettoie une base existante.
+
+**Lieux qui ne sont pas des entreprises écartés** : bornes de recharge (Ionity, Izivia, Freshmile, Tesla Supercharger…), parkings, distributeurs de billets, stations de taxis, arrêts de bus, mairies, écoles publiques… Ils sont reconnus à leur catégorie Google Maps ou à leur nom, quelle que soit la source.
+
+**Secteur déduit de la catégorie Google.** Une fiche Google Maps prend le secteur de sa catégorie (« Pizzeria » → Restaurants, « Service de taxi » → Taxis, VTC…). Une fiche remontée par la recherche d'un secteur mais dont la catégorie désigne un autre secteur non demandé est ignorée : chercher des fleuristes ne ramène plus la jardinerie d'à côté.
 
 #### Comment l'outil trouve les sites web
 1. **Déduction du nom de domaine** : variantes du nom et de la ville × extensions `.fr`, `.com`, `.eu`, `.net`, `.org`, `.info`, toutes testées en parallèle.
@@ -97,7 +101,7 @@ Le bouton **🔄 Analyser tous les prospects** relance tout en une tâche : rech
 - **📍 Autour de** : une ville ou une adresse et un rayon (1 à 50 km en un clic, ou une valeur libre). Une colonne **Distance** apparaît, triée du plus proche au plus loin. Les fiches sans coordonnées GPS sont gardées si leur ville correspond ;
 - **Plus de critères** : avec ou sans site, téléphone ou e-mail ; score minimum et maximum ; effectif minimum ; note Google minimum ; relance en retard, planifiée ou absente ; entreprise créée après une date.
 
-Plusieurs valeurs d'un même filtre s'additionnent (*restaurants **ou** fleuristes*), et les filtres différents se cumulent (*… **et** sans site **et** à moins de 5 km de Lattes*). Les filtres actifs s'affichent en étiquettes, retirables d'un clic, et sont conservés d'une session à l'autre. Les cartes de statistiques en haut de page servent de raccourcis.
+Plusieurs valeurs d'un même filtre s'additionnent (*restaurants **ou** fleuristes*), et les filtres différents se cumulent (*… **et** sans site **et** à moins de 5 km de Lattes*). Les filtres actifs s'affichent en étiquettes, retirables d'un clic, et sont conservés d'une session à l'autre. Les cartes de statistiques en haut de page (total, sans site, sans téléphone, sites en mauvais état, non analysés, relances à faire, intéressés, signés) servent de raccourcis : un clic applique le filtre correspondant. Sans aucun filtre actif, la liste affiche tous les prospects.
 
 **⭐ Vues** enregistre la combinaison de filtres et le tri actuels sous un nom (ex. « Restaurants sans site à Lattes ») pour la retrouver en un clic.
 
@@ -131,13 +135,15 @@ Le scraping n'est **pas indétectable** : l'outil n'essaie pas de passer pour in
 - **Ce que fait l'outil pour limiter les risques :**
   - navigateur visible par défaut, ce qui permet de résoudre un CAPTCHA à la main (le scraping reprend tout seul ensuite) ;
   - profil de navigateur persistant, qui se comporte comme un visiteur habituel ;
-  - pauses aléatoires entre les fiches ;
+  - pauses aléatoires entre les fiches (1 à 2,5 s par défaut, réglables) ;
   - ouverture des fiches par clic dans la liste ;
   - arrêt propre en cas de blocage en mode invisible.
 - **Bonnes pratiques :**
   - quelques centaines de fiches par jour au maximum ;
   - ne vous connectez jamais à votre compte Google dans la fenêtre ouverte par l'outil ;
   - si le CAPTCHA revient souvent, arrêtez-vous pour la journée.
+
+**Vitesse.** Les photos, vidéos et polices des fiches ne sont pas téléchargées (sauf les images d'un CAPTCHA). Les fiches déjà enregistrées ne sont pas rouvertes (leur note Google n'est donc pas rafraîchie par une nouvelle recherche), et les lieux hors cible sont écartés depuis la liste des résultats, sans ouvrir leur fiche. Si vos réglages ont gardé les anciennes pauses (2 à 5 s), baissez-les dans **⚙️ Réglages**.
 
 Google modifie régulièrement le code de Maps. Tous les sélecteurs sont regroupés en haut de `app/sources/google_maps.py` (dictionnaire `SELECTORS` et script `PLACE_EXTRACTION_SCRIPT`), ce qui rend la correction rapide.
 
@@ -202,7 +208,20 @@ tests/                  Tests automatisés (pytest)
 ```
 
 - **Temps réel :** chaque changement (prospect ajouté, analyse terminée, progression d'une tâche) est poussé à l'interface par WebSocket. Aucun rafraîchissement manuel, aucune interrogation périodique.
+- **Analyse rapide :** les rendus ordinateur et mobile sont faits en même temps. Le modèle de langage rédige le rapport hors de la limite d'analyses simultanées, pendant que les sites suivants sont déjà audités. La recherche de sites vérifie les candidats en parallèle et répartit les requêtes entre DuckDuckGo et Bing.
 - **Dédoublonnage :** une même entreprise trouvée dans le registre, OpenStreetMap et Google Maps est fusionnée (SIRET, domaine, identifiant Google, ou nom similaire à moins de 250 m).
+
+### Sécurité
+
+L'application n'a pas de comptes utilisateurs : elle est conçue pour tourner sur votre PC uniquement.
+
+- **Écoute locale :** le serveur écoute sur `127.0.0.1` et refuse de démarrer sur une autre adresse sans `PROSPECT_ALLOW_REMOTE=1` (les noms par lesquels on y accède se déclarent alors dans `PROSPECT_ALLOWED_HOSTS`, séparés par des virgules).
+- **Origine des requêtes :** l'API ne répond qu'aux noms `127.0.0.1` et `localhost`, ce qui bloque le DNS rebinding. Elle refuse les modifications venues d'un autre site (CSRF), et le flux temps réel refuse les pages d'autres origines.
+- **Analyse des sites :** le scanner ne visite que des adresses http(s) publiques. Les adresses locales, privées ou `file:` sont refusées, redirections et navigations du navigateur comprises. Les pages sont lues jusqu'à 5 Mo au maximum.
+- **Liens :** seuls des liens web (http, https, mailto, tel) sont enregistrés et affichés. Un lien `javascript:` trouvé sur un site ou dans une fiche est écarté.
+- **Export CSV :** les cellules commençant par `=`, `+`, `-` ou `@` sont neutralisées pour Excel.
+- **Réglages :** l'exécutable Ollama doit s'appeler `ollama` (pas de chemin réseau). Lighthouse ne reçoit que des adresses sans caractères spéciaux pour l'invite de commandes Windows.
+- **Mises à jour :** si la page et le serveur ne viennent pas de la même version (serveur resté ouvert pendant une mise à jour), un bandeau demande de relancer `start.bat`.
 
 ### Tests
 

@@ -263,9 +263,11 @@ function renderStatistics(statistics) {
   const statisticCards = [
     { label: "Prospects", value: statistics.total, filter: {}, tone: "neutral" },
     { label: "Sans site web", value: statistics.by_opportunity.no_website || 0, filter: { opportunity_level: ["no_website"] }, tone: "hot" },
+    { label: "Sans téléphone", value: statistics.without_phone ?? 0, filter: { phone: "without" }, tone: "neutral" },
     { label: "Sites en mauvais état", value: statistics.by_opportunity.hot || 0, filter: { opportunity_level: ["hot"] }, tone: "hot" },
     { label: "Sites vieillissants", value: statistics.by_opportunity.warm || 0, filter: { opportunity_level: ["warm"] }, tone: "warm" },
     { label: "Non analysés", value: (statistics.by_opportunity.unscanned || 0) + (statistics.by_opportunity.unknown_website || 0), filter: { opportunity_level: ["unscanned", "unknown_website"] }, tone: "neutral" },
+    { label: "Relances à faire", value: statistics.follow_ups_due ?? 0, filter: { follow_up: "due" }, tone: "warm" },
     { label: "Intéressés / RDV", value: (statistics.by_status.interested || 0) + (statistics.by_status.meeting || 0), filter: { status: ["interested", "meeting"] }, tone: "good" },
     { label: "Signés", value: statistics.by_status.won || 0, filter: { status: ["won"] }, tone: "good" },
   ];
@@ -280,28 +282,59 @@ function renderStatistics(statistics) {
   ])));
 }
 
+function renderListError(error) {
+  const errorPanel = document.getElementById("prospects-error");
+  errorPanel.hidden = !error;
+  if (!error) return;
+  errorPanel.replaceChildren(
+    createElement("div", { className: "empty-icon", text: "⚠️" }),
+    createElement("p", {}, createElement("strong", { text: "La liste des prospects n'a pas pu être chargée." })),
+    createElement("p", { className: "muted", text: error.message }),
+    createElement("button", { type: "button", className: "button secondary", text: "Réessayer", onClick: () => requestProspectRefresh() }),
+  );
+}
+
+function describeProspectCount(displayedCount, totalCount) {
+  if (totalCount === null || displayedCount === totalCount) return `${displayedCount} prospect${displayedCount > 1 ? "s" : ""}`;
+  return `${displayedCount} affiché${displayedCount > 1 ? "s" : ""} sur ${totalCount}`;
+}
+
+// Each request is rendered on its own, so that a failing counter or facet never empties the list
 async function refreshProspects() {
-  const [prospects, statistics, facets] = await Promise.all([
+  const [prospectsOutcome, statisticsOutcome, facetsOutcome] = await Promise.allSettled([
     requestJson(`/api/prospects${buildQueryString(readListQuery())}`),
     requestJson("/api/statistics"),
     requestJson("/api/prospects/facets"),
   ]);
-  setFacets(facets);
+  if (facetsOutcome.status === "fulfilled") setFacets(facetsOutcome.value);
   refreshFilterBar();
-  renderStatistics(statistics);
+  const statistics = statisticsOutcome.status === "fulfilled" ? statisticsOutcome.value : null;
+  if (statistics) renderStatistics(statistics);
+  listIsStale = false;
+  if (prospectsOutcome.status === "rejected") {
+    displayedProspects = [];
+    selectedProspectIdentifiers.clear();
+    document.getElementById("prospect-rows").replaceChildren();
+    document.getElementById("prospects-empty").hidden = true;
+    document.getElementById("prospects-no-match").hidden = true;
+    document.getElementById("prospect-count").textContent = "";
+    renderListError(prospectsOutcome.reason);
+    refreshSelectionControls();
+    return;
+  }
+  renderListError(null);
+  const prospects = prospectsOutcome.value;
   displayedProspects = prospects;
   const existingIdentifiers = new Set(prospects.map((prospect) => prospect.id));
   [...selectedProspectIdentifiers].forEach((identifier) => { if (!existingIdentifiers.has(identifier)) selectedProspectIdentifiers.delete(identifier); });
   renderTableHeader();
   document.getElementById("prospect-rows").replaceChildren(...prospects.map(renderProspectRow));
   refreshSelectionControls();
-  const databaseIsEmpty = statistics.total === 0;
+  const totalCount = statistics ? statistics.total : null;
+  const databaseIsEmpty = totalCount === 0;
   document.getElementById("prospects-empty").hidden = !databaseIsEmpty;
   document.getElementById("prospects-no-match").hidden = databaseIsEmpty || prospects.length > 0;
-  document.getElementById("prospect-count").textContent = prospects.length === statistics.total
-    ? `${statistics.total} prospect${statistics.total > 1 ? "s" : ""}`
-    : `${prospects.length} affiché${prospects.length > 1 ? "s" : ""} sur ${statistics.total}`;
-  listIsStale = false;
+  document.getElementById("prospect-count").textContent = describeProspectCount(prospects.length, totalCount);
 }
 
 export const requestProspectRefresh = createCoalescedRefresher(refreshProspects);
@@ -382,13 +415,13 @@ function renderPageActions() {
           },
         },
         {
-          label: "🧹 Retirer les chaînes",
-          hint: "Supprime les franchises et grandes enseignes",
+          label: "🧹 Retirer les chaînes et lieux hors cible",
+          hint: "Franchises, grandes enseignes, bornes de recharge, parkings…",
           danger: true,
           onSelect: async () => {
-            if (!window.confirm("Supprimer tous les prospects reconnus comme chaînes ou franchises (McDonald's, Subway, Leclerc…) ?")) return;
-            const removal = await requestJson("/api/prospects/remove-chains", { method: "POST" });
-            showToast(removal.removed ? `${removal.removed} chaîne(s) retirée(s) : ${removal.names.slice(0, 6).join(", ")}${removal.removed > 6 ? "…" : ""}` : "Aucune chaîne trouvée.");
+            if (!window.confirm("Supprimer les chaînes et franchises (McDonald's, Subway, Leclerc…) et les lieux qui ne sont pas des entreprises (bornes de recharge, parkings, distributeurs…) ?")) return;
+            const removal = await requestJson("/api/prospects/remove-off-target", { method: "POST" });
+            showToast(removal.removed ? `${removal.removed} fiche(s) retirée(s) : ${removal.names.slice(0, 6).join(", ")}${removal.removed > 6 ? "…" : ""}` : "Aucune chaîne ni lieu hors cible trouvé.");
           },
         },
         { separator: true },

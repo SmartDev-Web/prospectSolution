@@ -79,7 +79,7 @@ def test_google_maps_listing_completes_a_registry_prospect():
 def test_chain_cleanup_removes_franchises_only():
     prospect_repository.upsert_prospect(build_registry_candidate())
     prospect_repository.upsert_prospect(build_registry_candidate(name="SUBWAY SUBAUNES", legal_name="SUBAUNES", siret="11122233300011", latitude=43.70))
-    assert prospect_repository.remove_chains() == ["SUBWAY SUBAUNES"]
+    assert prospect_repository.remove_off_target_prospects() == ["SUBWAY SUBAUNES"]
 
 
 def test_duplicates_are_detected_and_merged_with_their_history():
@@ -127,8 +127,8 @@ def test_establishments_of_one_company_become_one_prospect():
 def test_user_defined_chain_removes_every_matching_prospect():
     prospect_repository.upsert_prospect(build_registry_candidate())
     prospect_repository.upsert_prospect(build_registry_candidate(name="LOLITA BOUTIQUE LATTES", legal_name="SARL LOLA", siret="22233344400011", latitude=43.70))
-    assert prospect_repository.remove_chains([]) == []
-    assert prospect_repository.remove_chains(["lolita"]) == ["LOLITA BOUTIQUE LATTES"]
+    assert prospect_repository.remove_off_target_prospects([]) == []
+    assert prospect_repository.remove_off_target_prospects(["lolita"]) == ["LOLITA BOUTIQUE LATTES"]
 
 
 def test_list_can_be_filtered_around_a_place():

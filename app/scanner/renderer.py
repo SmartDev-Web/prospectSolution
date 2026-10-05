@@ -1,4 +1,5 @@
 """Real browser rendering of a website: screenshots, layout and performance measurements."""
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,11 +9,12 @@ from playwright.async_api import Browser, Error as PlaywrightError, Page, Timeou
 
 from app.browser import browser_runtime
 from app.config import BROWSER_USER_AGENT, MOBILE_USER_AGENT, SCREENSHOT_DIRECTORY
+from app.web_safety import BLOCKED_ADDRESS_MESSAGE, is_public_web_url
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TIMEOUT_MS = 45000
 LOAD_EVENT_TIMEOUT_MS = 20000
-NETWORK_IDLE_TIMEOUT_MS = 6000
+NETWORK_IDLE_TIMEOUT_MS = 4000
 NAVIGATION_ATTEMPTS = 2
 STYLES_READY_TIMEOUT_MS = 20000
 STYLES_READY_SCRIPT = """
@@ -156,6 +158,28 @@ async def navigate(page: Page, url: str) -> int | None:
             logger.info("Navigation to %s failed (%s), retrying", url, str(error).splitlines()[0])
 
 
+async def refuse_private_documents(devtools_session) -> None:
+    """Pause only page and frame documents through the DevTools protocol, failing those aimed at local or private addresses.
+
+    Sub-resources are never intercepted, so the cache and the timing measurements stay those of a normal visit.
+    """
+    pending_decisions: set[asyncio.Task] = set()
+    async def decide(paused_request: dict) -> None:
+        try:
+            if await is_public_web_url(paused_request["request"]["url"]):
+                await devtools_session.send("Fetch.continueRequest", {"requestId": paused_request["requestId"]})
+            else:
+                await devtools_session.send("Fetch.failRequest", {"requestId": paused_request["requestId"], "errorReason": "AddressUnreachable"})
+        except PlaywrightError as error:
+            logger.debug("Paused request already gone : %s", error)
+    def schedule_decision(paused_request: dict) -> None:
+        decision_task = asyncio.ensure_future(decide(paused_request))
+        pending_decisions.add(decision_task)
+        decision_task.add_done_callback(pending_decisions.discard)
+    devtools_session.on("Fetch.requestPaused", schedule_decision)
+    await devtools_session.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}]})
+
+
 async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile: bool, screenshot_path: Path) -> tuple[ViewportRender, str, str]:
     """Load a page in a dedicated context, measure it and capture a screenshot."""
     browser_context = await browser.new_context(
@@ -172,6 +196,7 @@ async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile:
         page = await browser_context.new_page()
         devtools_session = await browser_context.new_cdp_session(page)
         await devtools_session.send("Network.enable")
+        await refuse_private_documents(devtools_session)
         def record_transferred_bytes(network_event: dict) -> None:
             viewport_render.transferred_bytes += int(network_event.get("encodedDataLength", 0))
         def record_request(request) -> None:
@@ -199,22 +224,28 @@ async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile:
 
 
 async def render_website(url: str, file_prefix: str) -> RenderResult:
-    """Render a homepage on desktop then on mobile, keeping the desktop render if only mobile fails."""
+    """Render a homepage on desktop and on mobile at the same time, keeping the desktop render if only mobile fails."""
     render_result = RenderResult()
-    browser = await browser_runtime.get_scanner_browser()
-    try:
-        render_result.desktop, render_result.rendered_html, render_result.final_url = await render_viewport(
-            browser, url, DESKTOP_VIEWPORT, False, SCREENSHOT_DIRECTORY / f"{file_prefix}_desktop.jpg",
-        )
-    except (PlaywrightError, PlaywrightTimeoutError) as error:
-        logger.warning("Desktop rendering of %s failed : %s", url, error)
-        render_result.error = str(error).splitlines()[0]
+    if not await is_public_web_url(url):
+        render_result.error = BLOCKED_ADDRESS_MESSAGE
         return render_result
-    try:
-        render_result.mobile, _mobile_html, _mobile_url = await render_viewport(
-            browser, render_result.final_url or url, MOBILE_VIEWPORT, True, SCREENSHOT_DIRECTORY / f"{file_prefix}_mobile.jpg",
-        )
-    except (PlaywrightError, PlaywrightTimeoutError) as error:
-        logger.warning("Mobile rendering of %s failed : %s", url, error)
-        render_result.mobile_error = str(error).splitlines()[0]
+    browser = await browser_runtime.get_scanner_browser()
+    desktop_outcome, mobile_outcome = await asyncio.gather(
+        render_viewport(browser, url, DESKTOP_VIEWPORT, False, SCREENSHOT_DIRECTORY / f"{file_prefix}_desktop.jpg"),
+        render_viewport(browser, url, MOBILE_VIEWPORT, True, SCREENSHOT_DIRECTORY / f"{file_prefix}_mobile.jpg"),
+        return_exceptions=True,
+    )
+    for viewport_outcome in (desktop_outcome, mobile_outcome):
+        if isinstance(viewport_outcome, BaseException) and not isinstance(viewport_outcome, PlaywrightError):
+            raise viewport_outcome
+    if isinstance(desktop_outcome, PlaywrightError):
+        logger.warning("Desktop rendering of %s failed : %s", url, desktop_outcome)
+        render_result.error = str(desktop_outcome).splitlines()[0]
+        return render_result
+    render_result.desktop, render_result.rendered_html, render_result.final_url = desktop_outcome
+    if isinstance(mobile_outcome, PlaywrightError):
+        logger.warning("Mobile rendering of %s failed : %s", url, mobile_outcome)
+        render_result.mobile_error = str(mobile_outcome).splitlines()[0]
+    else:
+        render_result.mobile = mobile_outcome[0]
     return render_result

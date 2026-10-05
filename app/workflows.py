@@ -7,6 +7,7 @@ from app.http_client import OpenDataError
 from app.jobs import JobContext, job_manager
 from app.models import GoogleMapsSearchRequest, OpenDataSearchRequest, ProspectCandidate, SearchArea
 from app.prospects import candidate_names, prospect_repository
+from app.relevance import find_non_business_reason
 from app.scanner.service import scan_prospect
 from app.sectors import SECTORS_BY_KEY, Sector
 from app.settings_service import load_settings
@@ -108,26 +109,37 @@ def start_website_discovery_job(prospect_identifiers: list[int]):
     return job_manager.start("website_discovery", f"Recherche de sites ({len(prospect_identifiers)} prospects)", run)
 
 
-class ChainFilter:
-    """Skip chains and franchises during an import, counting what was left out."""
+class ImportFilter:
+    """Skip places that are not prospects (charging stations, parkings…) and, when asked, chains and franchises."""
 
-    def __init__(self, enabled: bool) -> None:
-        self._enabled = enabled
+    def __init__(self, exclude_chains: bool) -> None:
+        self._exclude_chains = exclude_chains
         self._custom_brands = parse_custom_brands(load_settings()["custom_chain_brands"])
-        self.skipped_names: list[str] = []
+        self.skipped_chain_names: list[str] = []
+        self.skipped_place_names: list[str] = []
+
+    def rejection_reason(self, candidate: ProspectCandidate) -> str | None:
+        """Return why a candidate is left out of the import, or None when it is kept."""
+        non_business_reason = find_non_business_reason(candidate_names(candidate), candidate.category_label)
+        if non_business_reason:
+            self.skipped_place_names.append(candidate.name)
+            return non_business_reason
+        if self._exclude_chains:
+            chain_reason = detect_chain(candidate_names(candidate), candidate.website_url, candidate.brand, candidate.establishment_count, self._custom_brands)
+            if chain_reason:
+                self.skipped_chain_names.append(candidate.name)
+                return chain_reason
+        return None
 
     def accepts(self, candidate: ProspectCandidate) -> bool:
-        if not self._enabled:
-            return True
-        if detect_chain(candidate_names(candidate), candidate.website_url, candidate.brand, candidate.establishment_count, self._custom_brands):
-            self.skipped_names.append(candidate.name)
-            return False
-        return True
+        return self.rejection_reason(candidate) is None
 
     def summary(self) -> str:
-        unique_names = sorted(set(self.skipped_names))
-        preview = ", ".join(unique_names[:8]) + ("…" if len(unique_names) > 8 else "")
-        return f"Chaînes et franchises ignorées : {len(self.skipped_names)}" + (f" ({preview})" if unique_names else "")
+        def describe(label: str, names: list[str]) -> str:
+            unique_names = sorted(set(names))
+            preview = ", ".join(unique_names[:8]) + ("…" if len(unique_names) > 8 else "")
+            return f"{label} : {len(names)}" + (f" ({preview})" if unique_names else "")
+        return " · ".join((describe("Chaînes et franchises ignorées", self.skipped_chain_names), describe("Lieux hors cible ignorés", self.skipped_place_names)))
 
 
 async def scan_prospects(context: JobContext, prospect_identifiers: list[int]) -> None:
@@ -135,18 +147,17 @@ async def scan_prospects(context: JobContext, prospect_identifiers: list[int]) -
     concurrency_limiter = asyncio.Semaphore(max(1, int(load_settings()["scan_concurrency"])))
     context.set_progress(0, len(prospect_identifiers), f"Analyse de {len(prospect_identifiers)} prospects…")
     async def scan_with_limit(prospect_identifier: int) -> None:
-        async with concurrency_limiter:
-            try:
-                scanned_prospect = await scan_prospect(prospect_identifier)
-            except Exception as error:
-                logger.exception("Scan of prospect %s failed", prospect_identifier)
-                context.advance(f"Échec de l'analyse du prospect #{prospect_identifier} : {error}")
-                return
-            if scanned_prospect is None:
-                context.advance(f"Prospect #{prospect_identifier} déjà fusionné ou supprimé")
-                return
-            score_label = f"{scanned_prospect['score']}/100" if scanned_prospect["score"] is not None else "pas de site"
-            context.advance(f"{scanned_prospect['name']} : {score_label}")
+        try:
+            scanned_prospect = await scan_prospect(prospect_identifier, concurrency_limiter)
+        except Exception as error:
+            logger.exception("Scan of prospect %s failed", prospect_identifier)
+            context.advance(f"Échec de l'analyse du prospect #{prospect_identifier} : {error}")
+            return
+        if scanned_prospect is None:
+            context.advance(f"Prospect #{prospect_identifier} déjà fusionné ou supprimé")
+            return
+        score_label = f"{scanned_prospect['score']}/100" if scanned_prospect["score"] is not None else "pas de site"
+        context.advance(f"{scanned_prospect['name']} : {score_label}")
     await asyncio.gather(*(scan_with_limit(prospect_identifier) for prospect_identifier in prospect_identifiers))
     context.set_result(scanned=len(prospect_identifiers))
 
@@ -164,7 +175,7 @@ def start_open_data_search(search_request: OpenDataSearchRequest):
     async def run(context: JobContext) -> None:
         touched_identifiers: list[int] = []
         created_count = 0
-        chain_filter = ChainFilter(search_request.exclude_chains)
+        import_filter = ImportFilter(search_request.exclude_chains)
         if search_request.use_government_registry:
             context.log("Interrogation du registre des entreprises (INSEE / Sirene)…")
             registry_count = 0
@@ -173,7 +184,7 @@ def start_open_data_search(search_request: OpenDataSearchRequest):
                     search_request.area, sectors, search_request.custom_naf_codes, search_request.exclude_large_companies,
                     search_request.created_after, search_request.max_results,
                 ):
-                    if not chain_filter.accepts(candidate):
+                    if not import_filter.accepts(candidate):
                         continue
                     prospect_identifier, created = prospect_repository.upsert_prospect(candidate)
                     touched_identifiers.append(prospect_identifier)
@@ -191,14 +202,14 @@ def start_open_data_search(search_request: OpenDataSearchRequest):
             except OpenDataError as error:
                 context.log(f"⚠️ OpenStreetMap indisponible : {error}")
                 osm_candidates = []
-            osm_candidates = [candidate for candidate in osm_candidates if chain_filter.accepts(candidate)]
+            osm_candidates = [candidate for candidate in osm_candidates if import_filter.accepts(candidate)]
             for candidate in osm_candidates:
                 prospect_identifier, created = prospect_repository.upsert_prospect(candidate)
                 touched_identifiers.append(prospect_identifier)
                 created_count += int(created)
             context.log(f"OpenStreetMap : {len(osm_candidates)} commerces trouvés.")
         touched_identifiers = list(dict.fromkeys(touched_identifiers))
-        context.log(chain_filter.summary())
+        context.log(import_filter.summary())
         found_websites = 0
         if search_request.discover_websites:
             found_websites = await discover_missing_websites(context, touched_identifiers)
@@ -223,12 +234,15 @@ def start_google_maps_search(search_request: GoogleMapsSearchRequest):
     async def run(context: JobContext) -> None:
         touched_identifiers: list[int] = []
         created_count = 0
-        chain_filter = ChainFilter(search_request.exclude_chains)
+        import_filter = ImportFilter(search_request.exclude_chains)
         scraper = GoogleMapsScraper(headless=headless, pause_range_seconds=pause_range, log=context.log)
         context.set_progress(0, 0, f"{len(queries)} recherches Google Maps à effectuer")
-        async for candidate in scraper.scrape(search_request.area, queries, search_request.max_results_per_query):
-            if not chain_filter.accepts(candidate):
-                context.log(f"{candidate.name} : chaîne ignorée")
+        # Places already stored are not opened again: a new search only spends time on new businesses
+        known_place_keys = prospect_repository.list_google_place_keys()
+        async for candidate in scraper.scrape(search_request.area, queries, search_request.max_results_per_query, known_place_keys):
+            rejection_reason = import_filter.rejection_reason(candidate)
+            if rejection_reason:
+                context.log(f"{candidate.name} : ignoré ({rejection_reason})")
                 continue
             prospect_identifier, created = prospect_repository.upsert_prospect(candidate)
             touched_identifiers.append(prospect_identifier)
@@ -241,7 +255,7 @@ def start_google_maps_search(search_request: GoogleMapsSearchRequest):
             if prospect and not prospect["website_url"] and not prospect["website_check_done"]:
                 # Google Maps is authoritative: a listing without website means the business has none
                 prospect_repository.record_website_check(prospect_identifier, None)
-        context.log(chain_filter.summary())
+        context.log(import_filter.summary())
         merge_duplicates_if_enabled(context)
         context.set_result(prospects=len(touched_identifiers), created=created_count)
         context.log(f"Terminé : {len(touched_identifiers)} fiches ({created_count} nouvelles).")

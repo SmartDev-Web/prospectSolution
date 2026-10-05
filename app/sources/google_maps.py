@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 from urllib.parse import parse_qs, quote, urlparse
 
-from playwright.async_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import BrowserContext, Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeoutError
 
 from app.browser import browser_runtime
 from app.config import GOOGLE_MAPS_PROFILE_DIRECTORY
 from app.geo import is_within_radius
 from app.models import ProspectCandidate, SearchArea
+from app.relevance import find_non_business_reason, find_sector_by_category
 from app.sectors import Sector
 from app.text_utils import company_name_similarity
 
@@ -63,6 +64,12 @@ SCROLL_GROWTH_TIMEOUT_MS = 8000
 RESULT_CLICK_TIMEOUT_MS = 6000
 LOOKUP_RESULTS_CHECKED = 3
 LOOKUP_NAME_SIMILARITY = 0.6
+# Place photos, Street View pictures, videos and fonts are useless to read a listing and make up most of the downloaded bytes;
+# CAPTCHA pictures come from google.com/recaptcha and stay allowed
+BLOCKED_URL_PATTERNS = ("*googleusercontent.com/*", "*streetviewpixels-pa.googleapis.com/*", "*fonts.gstatic.com/*", "*.woff2*", "*.mp4*", "*.webm*")
+RESULT_CARDS_SCRIPT = """
+links => links.map(link => [link.href, (link.closest('[role="article"]') || link.parentElement || link).innerText || ''])
+"""
 
 
 @dataclass
@@ -112,12 +119,28 @@ def parse_review_count(review_text: str | None) -> int | None:
     return int(re.sub(r"\D", "", digits_groups[-1]) or 0) or None
 
 
+def extract_place_key(place_url: str) -> str | None:
+    """Return the stable Google identifier embedded in a place URL."""
+    place_key_match = PLACE_KEY_PATTERN.search(place_url)
+    return place_key_match.group(1) if place_key_match else None
+
+
+def describe_card_rejection(card_text: str) -> str | None:
+    """Recognise from its result card a place that is not a business, before spending time opening it."""
+    card_lines = [line.strip() for line in card_text.splitlines() if line.strip()]
+    if not card_lines:
+        return None
+    # The category is the first segment of a line ("Restaurant · 12 rue X"); the address segments are never compared
+    category_candidates = [line.split("·")[0].strip() for line in card_lines[1:4] if line.split("·")[0].strip()]
+    return next(filter(None, (find_non_business_reason(card_lines[:1], category_candidate) for category_candidate in category_candidates)), None)
+
+
 def parse_place(raw_place: dict, place_url: str, sector: Sector | None) -> ProspectCandidate | None:
-    """Convert the raw values read on a place page into a prospect candidate."""
+    """Convert the raw values read on a place page into a prospect candidate, classified by its Google category."""
     if not raw_place.get("name") or raw_place.get("permanentlyClosed"):
         return None
+    sector = find_sector_by_category(raw_place.get("category")) or sector
     coordinates_match = COORDINATES_PATTERN.search(place_url) or VIEWPORT_PATTERN.search(place_url)
-    place_key_match = PLACE_KEY_PATTERN.search(place_url)
     address_label = raw_place.get("addressLabel") or ""
     address = address_label.split(":", 1)[1].strip() if ":" in address_label else address_label.strip() or None
     postal_code_match = POSTAL_CODE_CITY_PATTERN.search(address or "")
@@ -141,7 +164,7 @@ def parse_place(raw_place: dict, place_url: str, sector: Sector | None) -> Prosp
         google_rating=float(rating_text) if re.fullmatch(r"\d(\.\d)?", rating_text) else None,
         google_review_count=parse_review_count(raw_place.get("reviewText")),
         google_maps_url=place_url.split("?")[0],
-        google_place_key=place_key_match.group(1) if place_key_match else None,
+        google_place_key=extract_place_key(place_url),
     )
 
 
@@ -175,29 +198,44 @@ class GoogleMapsScraper:
         self._log("⚠️ CAPTCHA Google : résolvez-le dans la fenêtre du navigateur, le scraping reprendra automatiquement.")
         await page.wait_for_url(lambda url: "/sorry/" not in url, timeout=CAPTCHA_RESOLUTION_TIMEOUT_MS)
 
-    async def _collect_place_urls(self, page: Page, search_url: str, max_results: int) -> list[str]:
+    async def _open_browser(self) -> tuple[BrowserContext, Page]:
+        """Open the persistent Google profile with heavy downloads blocked, closing it again if the setup fails."""
+        browser_context = await browser_runtime.launch_persistent_context(str(GOOGLE_MAPS_PROFILE_DIRECTORY), self._headless)
+        try:
+            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+            # Blocking at the network layer keeps Chromium's cache for the Maps scripts, unlike request interception
+            devtools_session = await browser_context.new_cdp_session(page)
+            await devtools_session.send("Network.enable")
+            await devtools_session.send("Network.setBlockedURLs", {"urls": list(BLOCKED_URL_PATTERNS)})
+        except BaseException:
+            await browser_context.close()
+            raise
+        return browser_context, page
+
+    async def _collect_result_cards(self, page: Page, search_url: str, max_results: int) -> list[tuple[str, str]]:
+        """Return the (place URL, card text) pairs of a search, scrolling the result list until enough are loaded."""
         await page.goto(search_url, wait_until="domcontentloaded")
         await self._accept_consent_if_needed(page)
         await self._ensure_not_blocked(page)
         await page.wait_for_selector(f'{SELECTORS["results_feed"]}, {SELECTORS["place_title"]}', timeout=30000)
         if await page.locator(SELECTORS["results_feed"]).count() == 0:
-            return [page.url]
-        place_urls: list[str] = []
+            return [(page.url, "")]
+        result_cards: list[tuple[str, str]] = []
         while True:
-            link_targets = await page.eval_on_selector_all(SELECTORS["result_link"], "links => links.map(link => link.href)")
-            place_urls = list(dict.fromkeys(link_targets))
-            if len(place_urls) >= max_results or await page.locator(SELECTORS["end_of_list"]).count() > 0:
+            raw_cards = await page.eval_on_selector_all(SELECTORS["result_link"], RESULT_CARDS_SCRIPT)
+            result_cards = list({place_url: (place_url, card_text) for place_url, card_text in raw_cards}.values())
+            if len(result_cards) >= max_results or await page.locator(SELECTORS["end_of_list"]).count() > 0:
                 break
             await page.eval_on_selector(SELECTORS["results_feed"], "feed => feed.scrollTo(0, feed.scrollHeight)")
             try:
                 await page.wait_for_function(
                     "([selector, previousCount]) => document.querySelectorAll(selector).length > previousCount",
-                    arg=[SELECTORS["result_link"], len(link_targets)],
+                    arg=[SELECTORS["result_link"], len(raw_cards)],
                     timeout=SCROLL_GROWTH_TIMEOUT_MS,
                 )
             except PlaywrightTimeoutError:
                 break
-        return place_urls[:max_results]
+        return result_cards[:max_results]
 
     async def _open_place(self, page: Page, place_url: str) -> str | None:
         """Open a place panel by clicking its result like a visitor would, or by URL when it left the list."""
@@ -218,28 +256,51 @@ class GoogleMapsScraper:
 
     async def _extract_place(self, page: Page, place_url: str, sector: Sector | None) -> ProspectCandidate | None:
         expected_name = await self._open_place(page, place_url)
-        try:
-            await page.wait_for_url(COORDINATES_PATTERN, timeout=5000)
-        except PlaywrightTimeoutError:
-            logger.debug("No coordinates in URL for %s", place_url)
+        # Result links already carry the coordinates; only a place opened without them needs its final URL
+        if not COORDINATES_PATTERN.search(place_url):
+            try:
+                await page.wait_for_url(COORDINATES_PATTERN, timeout=5000)
+            except PlaywrightTimeoutError:
+                logger.debug("No coordinates in URL for %s", place_url)
         raw_place = await page.evaluate(PLACE_EXTRACTION_SCRIPT, expected_name)
-        return parse_place(raw_place, page.url if COORDINATES_PATTERN.search(page.url) else place_url, sector)
+        located_url = place_url if COORDINATES_PATTERN.search(place_url) else page.url
+        return parse_place(raw_place, located_url if COORDINATES_PATTERN.search(located_url) else place_url, sector)
 
-    async def scrape(self, area: SearchArea, queries: list[tuple[str, Sector | None]], max_results_per_query: int) -> AsyncIterator[ProspectCandidate]:
-        """Yield businesses found for every query inside the search area."""
-        browser_context = await browser_runtime.launch_persistent_context(str(GOOGLE_MAPS_PROFILE_DIRECTORY), self._headless)
+    def _describe_off_target(self, candidate: ProspectCandidate, query_sector: Sector | None, searched_sector_keys: set[str]) -> str | None:
+        """Explain why a listing found by a sector query belongs to another, unsearched sector."""
+        if query_sector is None or candidate.sector_key in searched_sector_keys:
+            return None
+        return f"catégorie « {candidate.category_label} » hors des secteurs recherchés"
+
+    async def scrape(
+        self, area: SearchArea, queries: list[tuple[str, Sector | None]], max_results_per_query: int, known_place_keys: set[str] | None = None,
+    ) -> AsyncIterator[ProspectCandidate]:
+        """Yield businesses found for every query inside the search area, skipping places already stored or off target."""
+        browser_context, page = await self._open_browser()
+        searched_sector_keys = {sector.key for _query, sector in queries if sector}
+        skipped_place_keys = set(known_place_keys or ())
         try:
-            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             visited_place_urls: set[str] = set()
             for query_index, (query, sector) in enumerate(queries, start=1):
                 self._log(f"Recherche {query_index}/{len(queries)} : « {query} »")
-                place_urls = await self._collect_place_urls(page, build_search_url(query, area), max_results_per_query)
-                self._log(f"{len(place_urls)} fiches trouvées pour « {query} »")
-                for place_url in place_urls:
+                try:
+                    result_cards = await self._collect_result_cards(page, build_search_url(query, area), max_results_per_query)
+                except GoogleMapsBlockedError:
+                    raise
+                except PlaywrightError as error:
+                    self._log(f"⚠️ Recherche « {query} » impossible ({str(error).splitlines()[0][:100]}) : passage à la suivante.")
+                    continue
+                known_count = sum(1 for place_url, _card_text in result_cards if extract_place_key(place_url) in skipped_place_keys)
+                self._log(f"{len(result_cards)} fiches trouvées pour « {query} »" + (f", dont {known_count} déjà enregistrées" if known_count else ""))
+                for place_url, card_text in result_cards:
                     canonical_place_url = place_url.split("?")[0]
-                    if canonical_place_url in visited_place_urls:
+                    if canonical_place_url in visited_place_urls or extract_place_key(place_url) in skipped_place_keys:
                         continue
                     visited_place_urls.add(canonical_place_url)
+                    card_rejection = describe_card_rejection(card_text)
+                    if card_rejection:
+                        self._log(f"Ignoré sans ouverture : {card_rejection}")
+                        continue
                     await pause_like_a_human(*self._pause_range_seconds)
                     try:
                         candidate = await self._extract_place(page, place_url, sector)
@@ -248,24 +309,29 @@ class GoogleMapsScraper:
                     except PlaywrightError as error:
                         self._log(f"Fiche ignorée ({str(error).splitlines()[0][:80]}).")
                         continue
-                    if candidate and is_within_radius(area.latitude, area.longitude, area.radius_km, candidate.latitude, candidate.longitude):
-                        yield candidate
-                await pause_like_a_human(self._pause_range_seconds[0] * 2, self._pause_range_seconds[1] * 2)
+                    if candidate is None or not is_within_radius(area.latitude, area.longitude, area.radius_km, candidate.latitude, candidate.longitude):
+                        continue
+                    off_target_reason = self._describe_off_target(candidate, sector, searched_sector_keys)
+                    if off_target_reason:
+                        self._log(f"{candidate.name} : ignoré ({off_target_reason})")
+                        continue
+                    yield candidate
         finally:
             await browser_context.close()
 
     async def lookup(self, lookups: list[PlaceLookup]) -> AsyncIterator[tuple[PlaceLookup, ProspectCandidate | None]]:
         """Find each known business on Google Maps and yield its listing when the name matches."""
-        browser_context = await browser_runtime.launch_persistent_context(str(GOOGLE_MAPS_PROFILE_DIRECTORY), self._headless)
+        browser_context, page = await self._open_browser()
         try:
-            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             for lookup in lookups:
                 matching_candidate = None
                 try:
-                    place_urls = await self._collect_place_urls(page, build_search_url(lookup.query, lookup.area), LOOKUP_RESULTS_CHECKED)
-                except PlaywrightTimeoutError:
-                    place_urls = []
-                for place_url in place_urls:
+                    result_cards = await self._collect_result_cards(page, build_search_url(lookup.query, lookup.area), LOOKUP_RESULTS_CHECKED)
+                except GoogleMapsBlockedError:
+                    raise
+                except PlaywrightError:
+                    result_cards = []
+                for place_url, _card_text in result_cards:
                     await pause_like_a_human(*self._pause_range_seconds)
                     try:
                         candidate = await self._extract_place(page, place_url, None)
@@ -279,6 +345,5 @@ class GoogleMapsScraper:
                         matching_candidate = candidate
                         break
                 yield lookup, matching_candidate
-                await pause_like_a_human(*self._pause_range_seconds)
         finally:
             await browser_context.close()

@@ -1,15 +1,16 @@
 """Single entry point running a complete website audit for a prospect."""
 import asyncio
+import contextlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
-from app.config import BROWSER_USER_AGENT
 from app.database import get_database, utc_now_iso
 from app.events import event_bus
 from app.prospects import prospect_repository
@@ -25,6 +26,7 @@ from app.scanner.lighthouse import run_lighthouse
 from app.scanner.renderer import RenderResult, render_website
 from app.sectors import get_sector
 from app.settings_service import load_settings
+from app.web_safety import BLOCKED_ADDRESS_MESSAGE, create_public_web_client, is_public_web_url, is_web_url
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,9 @@ logger = logging.getLogger(__name__)
 async def url_answers(url: str) -> bool:
     """Tell whether a URL responds without error."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0), follow_redirects=True, headers={"User-Agent": BROWSER_USER_AGENT}, transport=httpx.AsyncHTTPTransport(retries=2)) as client:
-            response = await client.get(url)
-        return response.status_code < 400
+        async with create_public_web_client(8.0) as client:
+            async with client.stream("GET", url) as response:
+                return response.status_code < 400
     except httpx.HTTPError:
         return False
 
@@ -113,10 +115,33 @@ async def confirm_with_browser(probe: HttpProbeResult, website_url: str, file_pr
     return render
 
 
-async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    """Collect every observation on a website and analyse it."""
+@dataclass
+class WebsiteObservations:
+    """Everything measured on a reachable website, before the analysis turns it into findings."""
+    website_url: str
+    final_url: str
+    probe: HttpProbeResult
+    certificate: Any
+    https_alternative_reachable: bool
+    render: RenderResult
+    render_problem: str | None
+    crawled_pages: list
+    lighthouse_scores: dict[str, int] | None
+    favicon_found: bool
+    raw_request_refusal: str | None
+
+
+def describe_unreachable_website(final_url: str | None, http_status: int | None, error: str) -> dict[str, Any]:
+    """Build the scan values of a website that could not be audited."""
+    return {"reachable": False, "final_url": final_url, "http_status": http_status, "findings": [build_finding("site_unreachable", detail=error)], "strengths": [], "metrics": {"error": error}, "contacts": {}}
+
+
+async def collect_website_observations(prospect: dict[str, Any], settings: dict[str, Any]) -> WebsiteObservations | dict[str, Any]:
+    """Run every network measurement of a website; return the scan values directly when the site cannot be reached."""
     website_url = prospect["website_url"]
     file_prefix = f"{prospect['id']}_{int(time.time())}"
+    if not await is_public_web_url(website_url):
+        return describe_unreachable_website(website_url, None, BLOCKED_ADDRESS_MESSAGE)
     probe = await fetch_homepage(website_url)
     browser_confirmed_render = None
     raw_request_refusal = None
@@ -125,49 +150,63 @@ async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, 
         raw_request_refusal = probe.error
         browser_confirmed_render = await confirm_with_browser(probe, website_url, file_prefix)
         if browser_confirmed_render is None:
-            unreachable_finding = build_finding("site_unreachable", detail=probe.error or "erreur inconnue")
-            return {"reachable": False, "final_url": probe.final_url, "http_status": probe.status_code, "findings": [unreachable_finding], "strengths": [], "metrics": {"error": probe.error}, "contacts": {}}
+            return describe_unreachable_website(probe.final_url, probe.status_code, probe.error or "erreur inconnue")
     final_url = probe.final_url or website_url
     parsed_final_url = urlparse(final_url)
-    https_alternative_reachable = False
-    if parsed_final_url.scheme == "http":
-        https_alternative_reachable = await url_answers(f"https://{parsed_final_url.netloc}/")
-    else:
-        probe.http_redirects_to_https = await check_http_redirect(parsed_final_url.netloc)
-    certificate, render, favicon_found, crawled_pages = await asyncio.gather(
+    served_over_http = parsed_final_url.scheme == "http"
+    certificate, render, favicon_found, crawled_pages, transport_check = await asyncio.gather(
         inspect_certificate(final_url),
         return_value(browser_confirmed_render) if browser_confirmed_render else render_website(final_url, file_prefix),
         url_answers(f"{parsed_final_url.scheme}://{parsed_final_url.netloc}/favicon.ico"),
         crawl_internal_pages(final_url, probe.html, int(settings["crawl_internal_pages"])),
+        url_answers(f"https://{parsed_final_url.netloc}/") if served_over_http else check_http_redirect(parsed_final_url.netloc),
     )
-    lighthouse_scores = await run_lighthouse(final_url) if settings["lighthouse_enabled"] else None
-    render_problem = find_render_problem(render, probe.html)
-    trusted_render = render if render_problem is None else None
-    visual_assessment = await assess_screenshot(render.desktop.screenshot_path) if trusted_render else None
-    analysis_output = analyze_website(AnalysisInput(
+    if not served_over_http:
+        probe.http_redirects_to_https = transport_check
+    return WebsiteObservations(
         website_url=website_url,
-        sector=get_sector(prospect.get("sector_key")),
+        final_url=final_url,
         probe=probe,
         certificate=certificate,
-        https_alternative_reachable=https_alternative_reachable,
-        render=trusted_render,
+        https_alternative_reachable=served_over_http and bool(transport_check),
+        render=render,
+        render_problem=find_render_problem(render, probe.html),
         crawled_pages=crawled_pages,
-        lighthouse_scores=lighthouse_scores,
-        visual_assessment=visual_assessment,
+        lighthouse_scores=await run_lighthouse(final_url) if settings["lighthouse_enabled"] else None,
         favicon_found=favicon_found,
+        raw_request_refusal=raw_request_refusal,
+    )
+
+
+async def analyze_website_observations(prospect: dict[str, Any], observations: WebsiteObservations) -> dict[str, Any]:
+    """Turn the measurements of a website into findings, with the optional visual review of the vision model."""
+    render = observations.render
+    trusted_render = render if observations.render_problem is None else None
+    visual_assessment = await assess_screenshot(render.desktop.screenshot_path) if trusted_render else None
+    analysis_output = analyze_website(AnalysisInput(
+        website_url=observations.website_url,
+        sector=get_sector(prospect.get("sector_key")),
+        probe=observations.probe,
+        certificate=observations.certificate,
+        https_alternative_reachable=observations.https_alternative_reachable,
+        render=trusted_render,
+        crawled_pages=observations.crawled_pages,
+        lighthouse_scores=observations.lighthouse_scores,
+        visual_assessment=visual_assessment,
+        favicon_found=observations.favicon_found,
         google_rating=prospect.get("google_rating"),
         google_review_count=prospect.get("google_review_count"),
     ))
     if visual_assessment:
         analysis_output.metrics["visual_assessment"] = visual_assessment
-    if raw_request_refusal:
-        analysis_output.metrics["raw_request_refused"] = f"{raw_request_refusal} : le site a été vérifié avec un vrai navigateur"
-    if render_problem or render.mobile_error:
-        analysis_output.metrics["render_error"] = render_problem or f"mobile : {render.mobile_error}"
+    if observations.raw_request_refusal:
+        analysis_output.metrics["raw_request_refused"] = f"{observations.raw_request_refusal} : le site a été vérifié avec un vrai navigateur"
+    if observations.render_problem or render.mobile_error:
+        analysis_output.metrics["render_error"] = observations.render_problem or f"mobile : {render.mobile_error}"
     return {
         "reachable": True,
-        "final_url": final_url,
-        "http_status": probe.status_code,
+        "final_url": observations.final_url,
+        "http_status": observations.probe.status_code,
         "findings": analysis_output.findings,
         "strengths": analysis_output.strengths,
         "metrics": analysis_output.metrics,
@@ -177,14 +216,23 @@ async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, 
     }
 
 
-async def scan_prospect(prospect_identifier: int) -> dict[str, Any] | None:
-    """Audit the prospect website (or its absence), write the sales report and store everything."""
-    prospect = prospect_repository.get_prospect(prospect_identifier)
-    if prospect is None:
-        return None
-    settings = load_settings()
-    if prospect.get("website_url"):
-        scan_values = await audit_reachable_website(prospect, settings)
+async def scan_prospect(prospect_identifier: int, audit_limiter: asyncio.Semaphore | None = None) -> dict[str, Any] | None:
+    """Audit the prospect website (or its absence), write the sales report and store everything.
+
+    The prospect is read and its website measured while holding the limiter, so that a long queue never
+    audits an outdated address. The language model steps run outside it: the next websites are measured
+    while the model reviews screenshots and writes reports.
+    """
+    async with audit_limiter or contextlib.nullcontext():
+        prospect = prospect_repository.get_prospect(prospect_identifier)
+        if prospect is None:
+            return None
+        settings = load_settings()
+        observations = await collect_website_observations(prospect, settings) if prospect.get("website_url") else None
+    if isinstance(observations, WebsiteObservations):
+        scan_values = await analyze_website_observations(prospect, observations)
+    elif observations is not None:
+        scan_values = observations
     else:
         scan_values = {"reachable": False, "findings": build_missing_website_findings(prospect), "strengths": [], "metrics": {}, "contacts": {}}
     score, opportunity_level, report = finalize_diagnosis(prospect, scan_values["findings"], scan_values["strengths"], scan_values["metrics"], scan_values["reachable"], settings)
@@ -192,12 +240,15 @@ async def scan_prospect(prospect_identifier: int) -> dict[str, Any] | None:
     scan_values["report"] = await enhance_report_with_language_model(prospect, report)
     if (prospect.get("diagnosis_overrides") or {}).get("summary"):
         scan_values["report"]["summary"] = prospect["diagnosis_overrides"]["summary"]
+    if prospect_repository.get_prospect(prospect_identifier) is None:
+        # Merged or deleted while the report was being written
+        return None
     store_scan(prospect_identifier, scan_values)
     contacts = scan_values.get("contacts") or {}
     contact_changes = {
         "phone": (contacts.get("phones") or [None])[0],
         "email": (contacts.get("emails") or [None])[0],
-        "social_url": next((profile for profile in contacts.get("social_profiles", []) if "facebook" in profile or "instagram" in profile), None),
+        "social_url": next((profile for profile in contacts.get("social_profiles", []) if is_web_url(profile) and ("facebook." in profile or "instagram." in profile)), None),
     }
     prospect_repository.apply_scan_result(prospect_identifier, score, opportunity_level, contact_changes)
     event_bus.publish("scan.completed", {"prospect_id": prospect_identifier, "score": score, "opportunity_level": opportunity_level})

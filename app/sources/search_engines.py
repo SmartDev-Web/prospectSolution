@@ -165,8 +165,12 @@ class SearchEngineRouter:
         return any(not engine.blocked for engine in self._engines)
 
     async def search(self, client: httpx.AsyncClient, query: str) -> tuple[list[str], str | None]:
-        """Return the results of the first engine that answers, with its key."""
-        for engine in self._engines:
+        """Return the results of the first engine that answers, starting with the one whose pacing allows a request soonest.
+
+        Spreading queries over the engines multiplies the throughput while each engine keeps its own rate limit.
+        """
+        available_engines = [engine for engine in self._engines if not engine.blocked]
+        for engine in sorted(available_engines, key=lambda candidate_engine: candidate_engine.pacer.seconds_until_ready()):
             if engine.blocked:
                 continue
             try:

@@ -9,10 +9,15 @@ export async function requestJson(path, { method = "GET", body, signal } = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const responseText = await response.text();
-  const responseBody = responseText ? JSON.parse(responseText) : null;
+  let responseBody = null;
+  try {
+    responseBody = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    throw new ApiError(`Réponse illisible du serveur (HTTP ${response.status})`);
+  }
   if (!response.ok) {
     const detail = responseBody && responseBody.detail;
-    throw new ApiError(typeof detail === "string" ? detail : `Erreur HTTP ${response.status}`);
+    throw new ApiError(typeof detail === "string" ? detail : `Erreur HTTP ${response.status}${Array.isArray(detail) ? " : paramètres refusés par le serveur" : ""}`);
   }
   return responseBody;
 }
