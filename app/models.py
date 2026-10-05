@@ -104,6 +104,27 @@ class GoogleMapsEnrichmentRequest(BaseModel):
     limit: int = Field(default=30, ge=1, le=200)
 
 
+class CustomFinding(BaseModel):
+    """A problem written by the user in a diagnosis."""
+    title: str = Field(min_length=2, max_length=200)
+    impact: str = Field(default="", max_length=2000)
+    recommendation: str = Field(default="", max_length=1000)
+    severity: Literal["critical", "major", "minor"] = "major"
+    category: Literal["availability", "security", "mobile", "performance", "conversion", "seo", "legal", "design", "technology", "content", "sector"] = "design"
+
+
+class DiagnosisOverrides(BaseModel):
+    """Corrections applied by the user on top of the analyzer's diagnosis, kept across new analyses."""
+    dismissed_codes: list[str] = []
+    custom_findings: list[CustomFinding] = []
+    summary: str | None = Field(default=None, max_length=4000)
+
+
+class MarkChainRequest(BaseModel):
+    """Chain name typed by the user for a prospect that the automatic detection missed."""
+    brand: str = Field(min_length=2, max_length=80)
+
+
 class MergeRequest(BaseModel):
     """Prospects to merge into the oldest of them."""
     prospect_ids: list[int] = Field(min_length=2)

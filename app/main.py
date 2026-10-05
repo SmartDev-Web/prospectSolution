@@ -20,8 +20,10 @@ from app.llm.gpu import list_graphics_cards
 from app.llm.ollama import ollama_service
 from app.models import (
     ActivityCreate,
+    DiagnosisOverrides,
     GoogleMapsEnrichmentRequest,
     GoogleMapsSearchRequest,
+    MarkChainRequest,
     MergeRequest,
     OpenDataSearchRequest,
     ProspectCandidate,
@@ -32,9 +34,12 @@ from app.models import (
 )
 from app.prospects import prospect_repository
 from app.scanner.lighthouse import find_lighthouse_executable
+from app.scanner.service import edit_diagnosis
+from app.chains import parse_custom_brands
 from app.sectors import get_sector, serialize_sectors
+from app.text_utils import normalize_company_name
 from app.settings_service import load_settings, save_settings
-from app.workflows import start_google_maps_enrichment, start_google_maps_search, start_open_data_search, start_scan_job, start_website_discovery_job
+from app.workflows import start_full_refresh_job, start_google_maps_enrichment, start_google_maps_search, start_open_data_search, start_scan_job, start_website_discovery_job
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +157,13 @@ async def create_prospect(prospect_create: ProspectCreate) -> dict:
     return require_prospect(prospect_identifier)
 
 
+@application.post("/api/prospects/refresh-all")
+async def refresh_all_prospects() -> dict:
+    if job_manager.has_running_job("full_refresh"):
+        raise HTTPException(status_code=409, detail="Une analyse complète est déjà en cours.")
+    return start_full_refresh_job().to_dict()
+
+
 @application.post("/api/prospects/merge")
 async def merge_selected_prospects(merge_request: MergeRequest) -> dict:
     merged_prospect = prospect_repository.merge_prospects(merge_request.prospect_ids)
@@ -167,8 +179,32 @@ async def merge_duplicate_prospects() -> dict:
 
 @application.post("/api/prospects/remove-chains")
 async def remove_chain_prospects() -> dict:
-    removed_names = prospect_repository.remove_chains()
+    removed_names = prospect_repository.remove_chains(parse_custom_brands(load_settings()["custom_chain_brands"]))
     return {"removed": len(removed_names), "names": removed_names}
+
+
+@application.put("/api/prospects/{prospect_identifier}/diagnosis")
+async def update_prospect_diagnosis(prospect_identifier: int, diagnosis_overrides: DiagnosisOverrides) -> dict:
+    require_prospect(prospect_identifier)
+    overrides = diagnosis_overrides.model_dump()
+    overrides["summary"] = (overrides["summary"] or "").strip() or None
+    return edit_diagnosis(prospect_identifier, overrides)
+
+
+@application.post("/api/prospects/{prospect_identifier}/mark-chain")
+async def mark_prospect_as_chain(prospect_identifier: int, mark_chain_request: MarkChainRequest) -> dict:
+    require_prospect(prospect_identifier)
+    custom_brands_text = load_settings()["custom_chain_brands"]
+    brand_line = mark_chain_request.brand.strip()
+    if normalize_company_name(brand_line) not in parse_custom_brands(custom_brands_text):
+        custom_brands_text = "\n".join(line for line in (custom_brands_text.strip(), brand_line) if line)
+        save_settings({"custom_chain_brands": custom_brands_text})
+    removed_names = prospect_repository.remove_chains(parse_custom_brands(custom_brands_text))
+    if prospect_repository.get_prospect(prospect_identifier):
+        # The typed brand may not appear in this prospect's names: the user's decision still applies to it
+        removed_names.append(prospect_repository.get_prospect(prospect_identifier)["name"])
+        prospect_repository.delete_prospect(prospect_identifier)
+    return {"brand": brand_line, "removed": len(removed_names), "names": removed_names}
 
 
 @application.get("/api/prospects/{prospect_identifier}")

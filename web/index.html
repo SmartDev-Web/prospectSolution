@@ -49,6 +49,7 @@
         <button class="button secondary" id="discover-missing-websites" title="Relance la recherche de site pour tous les prospects sans site">🤖 Chercher les sites manquants</button>
         <button class="button secondary" id="enrich-phones" title="Cherche sur Google Maps les prospects sans téléphone (30 au maximum par passage)">📞 Compléter les téléphones</button>
         <button class="button secondary" id="remove-chains" title="Supprime les chaînes et franchises déjà importées">🧹 Retirer les chaînes</button>
+        <button class="button secondary" id="refresh-all" title="Recherche à nouveau les sites manquants, réanalyse toutes les fiches et fusionne les doublons">🔄 Analyser tous les prospects</button>
         <button class="button secondary" id="scan-unscanned">⚡ Analyser les prospects non analysés</button>
         <button class="button secondary" id="export-csv">⬇️ Exporter en CSV</button>
       </div>
@@ -171,6 +172,10 @@
         <div class="field-grid">
           <label class="checkbox"><input type="checkbox" name="auto_merge_duplicates"> Fusionner automatiquement les fiches identiques après chaque recherche</label>
         </div>
+        <h2>Chaînes et franchises <span class="muted">(en plus des ~390 enseignes reconnues automatiquement)</span></h2>
+        <label>Enseignes à exclure, une par ligne <span class="muted">(alimentée aussi par le bouton « C'est une chaîne » des fiches)</span>
+          <textarea name="custom_chain_brands" rows="4" placeholder="Kiabi&#10;Ma Petite Franchise"></textarea>
+        </label>
         <h2>Analyse des sites</h2>
         <div class="field-grid">
           <label>Analyses en parallèle<input name="scan_concurrency" type="number" min="1" max="8"></label>

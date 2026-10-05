@@ -273,6 +273,15 @@ export function initializeProspectsView() {
     const removal = await requestJson("/api/prospects/remove-chains", { method: "POST" });
     showToast(removal.removed ? `${removal.removed} chaîne(s) retirée(s) : ${removal.names.slice(0, 6).join(", ")}${removal.removed > 6 ? "…" : ""}` : "Aucune chaîne trouvée.");
   });
+  document.getElementById("refresh-all").addEventListener("click", async () => {
+    if (!window.confirm("Analyser tous les prospects ?\n\n1. Les sites manquants sont recherchés à nouveau.\n2. Toutes les fiches sont réanalysées (les corrections de diagnostic sont conservées).\n3. Les doublons révélés sont fusionnés.\n\nCela peut prendre du temps sur une grosse base.")) return;
+    try {
+      const job = await requestJson("/api/prospects/refresh-all", { method: "POST" });
+      showToast(`${job.label} lancée`);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
   document.getElementById("scan-unscanned").addEventListener("click", async () => {
     try {
       const job = await requestJson("/api/scans", { method: "POST", body: { only_unscanned: true } });

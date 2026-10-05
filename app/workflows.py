@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from app.chains import detect_chain
+from app.chains import detect_chain, parse_custom_brands
 from app.http_client import OpenDataError
 from app.jobs import JobContext, job_manager
 from app.models import GoogleMapsSearchRequest, OpenDataSearchRequest, ProspectCandidate, SearchArea
@@ -113,12 +113,13 @@ class ChainFilter:
 
     def __init__(self, enabled: bool) -> None:
         self._enabled = enabled
+        self._custom_brands = parse_custom_brands(load_settings()["custom_chain_brands"])
         self.skipped_names: list[str] = []
 
     def accepts(self, candidate: ProspectCandidate) -> bool:
         if not self._enabled:
             return True
-        if detect_chain(candidate_names(candidate), candidate.website_url, candidate.brand, candidate.establishment_count):
+        if detect_chain(candidate_names(candidate), candidate.website_url, candidate.brand, candidate.establishment_count, self._custom_brands):
             self.skipped_names.append(candidate.name)
             return False
         return True
@@ -141,9 +142,11 @@ async def scan_prospects(context: JobContext, prospect_identifiers: list[int]) -
                 logger.exception("Scan of prospect %s failed", prospect_identifier)
                 context.advance(f"Échec de l'analyse du prospect #{prospect_identifier} : {error}")
                 return
-            if scanned_prospect:
-                score_label = f"{scanned_prospect['score']}/100" if scanned_prospect["score"] is not None else "pas de site"
-                context.advance(f"{scanned_prospect['name']} : {score_label}")
+            if scanned_prospect is None:
+                context.advance(f"Prospect #{prospect_identifier} déjà fusionné ou supprimé")
+                return
+            score_label = f"{scanned_prospect['score']}/100" if scanned_prospect["score"] is not None else "pas de site"
+            context.advance(f"{scanned_prospect['name']} : {score_label}")
     await asyncio.gather(*(scan_with_limit(prospect_identifier) for prospect_identifier in prospect_identifiers))
     context.set_result(scanned=len(prospect_identifiers))
 
@@ -284,3 +287,19 @@ def start_google_maps_enrichment(prospect_identifiers: list[int]):
         context.set_result(completed=completed_count)
         context.log(f"Terminé : {completed_count} fiche(s) complétée(s) sur {len(lookups)}.")
     return job_manager.start("google_maps_enrichment", f"Complétion Google Maps ({len(prospect_identifiers)} prospects)", run)
+
+
+def start_full_refresh_job():
+    """Start a job refreshing every prospect: missing websites searched again, every site re-analysed, duplicates merged."""
+    async def run(context: JobContext) -> None:
+        context.log("Étape 1/3 : recherche des sites manquants…")
+        found_count = await discover_missing_websites(context, prospect_repository.list_ids_without_website(), include_already_checked=True)
+        context.log(f"{found_count} nouveau(x) site(s) trouvé(s).")
+        all_identifiers = prospect_repository.list_prospect_ids(only_unscanned=False, all_with_website=False)
+        context.log(f"Étape 2/3 : analyse de {len(all_identifiers)} prospects…")
+        await scan_prospects(context, all_identifiers)
+        context.log("Étape 3/3 : recherche des doublons…")
+        merged_count = prospect_repository.merge_all_duplicates()
+        context.set_result(websites_found=found_count, scanned=len(all_identifiers), merged=merged_count)
+        context.log(f"Terminé : {len(all_identifiers)} prospects analysés, {found_count} site(s) trouvé(s), {merged_count} doublon(s) fusionné(s).")
+    return job_manager.start("full_refresh", "Analyse complète de tous les prospects", run)

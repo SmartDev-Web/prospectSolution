@@ -122,3 +122,10 @@ def test_establishments_of_one_company_become_one_prospect():
     first_identifier, _ = prospect_repository.upsert_prospect(build_registry_candidate(siret="91884780700024", name="MULTANI"))
     second_identifier, created = prospect_repository.upsert_prospect(build_registry_candidate(siret="91884780700032", name="MULTANI", latitude=43.60, longitude=3.86))
     assert not created and first_identifier == second_identifier
+
+
+def test_user_defined_chain_removes_every_matching_prospect():
+    prospect_repository.upsert_prospect(build_registry_candidate())
+    prospect_repository.upsert_prospect(build_registry_candidate(name="LOLITA BOUTIQUE LATTES", legal_name="SARL LOLA", siret="22233344400011", latitude=43.70))
+    assert prospect_repository.remove_chains([]) == []
+    assert prospect_repository.remove_chains(["lolita"]) == ["LOLITA BOUTIQUE LATTES"]

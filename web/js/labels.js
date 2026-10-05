@@ -91,5 +91,6 @@ export const METRIC_LABELS = {
   visual_design_score: "Note visuelle IA (/10)",
   visual_assessment: "Avis de l'IA visuelle",
   crawled_pages: "Pages analysées",
+  raw_request_refused: "Requête automatique refusée",
   error: "Erreur",
 };

@@ -113,6 +113,7 @@ class ViewportRender:
     measurements: dict[str, Any] = field(default_factory=dict)
     console_error_count: int = 0
     page_error_count: int = 0
+    status_code: int | None = None
     request_count: int = 0
     transferred_bytes: int = 0
     http_resource_urls: list[str] = field(default_factory=list)
@@ -143,12 +144,12 @@ async def wait_for_page_settled(page: Page) -> None:
         logger.debug("Stylesheets or fonts of %s never finished loading", page.url)
 
 
-async def navigate(page: Page, url: str) -> None:
-    """Open a URL, retrying once when the network fails before any response."""
+async def navigate(page: Page, url: str) -> int | None:
+    """Open a URL and return the HTTP status, retrying once when the network fails before any response."""
     for attempt_number in range(1, NAVIGATION_ATTEMPTS + 1):
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
-            return
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+            return response.status if response else None
         except PlaywrightError as error:
             if attempt_number == NAVIGATION_ATTEMPTS or not any(marker in str(error) for marker in ("net::", "chrome-error://")):
                 raise
@@ -186,7 +187,7 @@ async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile:
         page.on("request", record_request)
         page.on("console", record_console_message)
         page.on("pageerror", record_page_error)
-        await navigate(page, url)
+        viewport_render.status_code = await navigate(page, url)
         await wait_for_page_settled(page)
         viewport_render.measurements = await page.evaluate(PAGE_MEASUREMENT_SCRIPT, list(COOKIE_BANNER_SELECTORS))
         await page.add_style_tag(content=", ".join(COOKIE_BANNER_SELECTORS) + " { display: none !important; }")

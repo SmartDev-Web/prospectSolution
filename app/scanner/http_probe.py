@@ -47,7 +47,12 @@ def build_http_client(verify_certificates: bool) -> httpx.AsyncClient:
         follow_redirects=True,
         verify=verify_certificates,
         transport=httpx.AsyncHTTPTransport(retries=CONNECTION_RETRIES, verify=verify_certificates),
-        headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9", "Accept": "text/html,application/xhtml+xml"},
+        headers={
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.6",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Upgrade-Insecure-Requests": "1",
+        },
     )
 
 

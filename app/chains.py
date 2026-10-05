@@ -30,12 +30,32 @@ PHRASE_BRANDS = (
     "era immobilier", "stephane plaza", "foncia", "nexity", "citya", "adecco", "manpower", "randstad", "temporis",
     "basic fit", "basic-fit", "fitness park", "keep cool", "orange bleue", "neoness", "cigusto", "clopinette",
     "petit vapoteur", "vapostore", "j well", "vapo club", "kiloutou", "loxam",
+    # Clothing, shoes and fashion
+    "kiabi", "zara", "h&m", "h & m", "primark", "celio", "camaieu", "pimkie", "promod", "gemo", "chaussea", "besson chaussures", "foot locker", "courir", "jd sports", "decimas",
+    "bershka", "pull and bear", "pull & bear", "stradivarius", "etam", "undiz", "orcanta", "jennyfer",
+    "naf naf", "armand thiery", "cache cache", "bizzbee", "okaidi", "jacadi", "du pareil au meme",
+    "sergent major", "tape a l oeil", "vertbaudet", "intimissimi", "calzedonia", "levi s", "superdry", "sostrene grene", "hema", "flying tiger", "babou", "maxi bazar", "la grande recre", "king jouet", "jouet club",
+    "pandora", "histoire d or", "marc orian", "julien d orcel", "claire s", "lush", "rituals", "sephora", "nocibe",
+    "kiko milano", "mac cosmetics", "body shop", "l occitane",
+    # Home, furniture and electronics "zodio", "alinea", "electro depot", "cash express", "cash converters", "easy cash", "mobalpa", "cuisinella", "cuisines schmidt", "cuisines references", "ixina", "la foir fouille", "maisons du monde", "conforama", "darty", "but cosy", "la maison de la literie", "maison de la literie",
+    "grand litier", "monsieur meuble", "tediber", "bricomarche", "toolstation", "brico cash",
+    # Optics, health and services networks
+    "optical center", "grand optical", "alain afflelou", "general d optique", "les opticiens mutualistes",
+    "carglass", "france pare brise", "dekra", "autosur", "securitest", "autobacs", "vulco", "carter cash",
+    "ibis", "campanile", "kyriad", "b&b hotel", "b & b hotel", "novotel", "mercure", "premiere classe", "formule 1",
+    "hotel f1", "best western", "logis hotel", "holiday inn", "appart city", "zenitude",
+    "iad france", "safti", "capifrance", "optimhome", "megagence", "proprietes privees", "square habitat",
+    "bistro regent", "flam s", "tablapizza", "la croissanterie", "pomme de pain", "bagel corner", "les burgers de papa",
+    "o tacos", "tacos king", "pitaya thai street food", "fabio salsa", "esthetic center", "body minute",
+    "fitness park", "keep cool", "on air fitness", "magic form", "l appart fitness", "vita liberte",
+    "acadomia", "complete formation", "anacours", "o2 care services", "shiva menage", "family sphere",
 )
 # Brands that are also common words, first names or surnames: they must be the whole business name
 EXACT_MATCH_BRANDS = (
     "paul", "quick", "but", "save", "free", "orange", "sfr", "action", "match", "metro", "casino", "spar", "cora",
     "noz", "sumo", "lcl", "cic", "axa", "mma", "o2", "shiva", "nicolas", "picard", "thiriet", "atol", "midas", "speedy",
-    "point s", "on air", "laforet", "truffaut", "boulanger", "leclerc", "carrefour",
+    "point s", "on air", "laforet", "truffaut", "boulanger", "leclerc", "carrefour", "normal", "casa", "fly", "atlas",
+    "jules", "brice", "mango", "adagio", "shampoo", "schmidt", "lapeyre", "devred", "lissac", "bonobo", "la halle",
 )
 CHAIN_WEBSITE_DOMAINS = (
     "mcdonalds.fr", "burgerking.fr", "quick.fr", "kfc.fr", "subwayfrance.fr", "subway.com", "dominos.fr", "pizzahut.fr",
@@ -67,10 +87,26 @@ def find_brand_in_name(name: str) -> str | None:
     return next((brand for brand in NORMALIZED_PHRASE_BRANDS if f" {brand} " in padded_name), None)
 
 
-def detect_chain(names: list[str], website_url: str | None = None, brand: str | None = None, establishment_count: int | None = None) -> str | None:
+def parse_custom_brands(custom_brands_text: str | None) -> list[str]:
+    """Normalize the chain names entered by the user, one per line."""
+    return [normalized_brand for normalized_brand in (normalize_company_name(line) for line in (custom_brands_text or "").splitlines()) if normalized_brand]
+
+
+def detect_chain(
+    names: list[str],
+    website_url: str | None = None,
+    brand: str | None = None,
+    establishment_count: int | None = None,
+    custom_brands: list[str] | None = None,
+) -> str | None:
     """Return the reason why a business belongs to a chain, or None for an independent business."""
     if brand:
         return f"marque nationale « {brand} »"
+    for name in names:
+        padded_name = f" {normalize_company_name(name or '')} "
+        matched_custom_brand = next((custom_brand for custom_brand in custom_brands or [] if f" {custom_brand} " in padded_name), None)
+        if matched_custom_brand:
+            return f"chaîne ajoutée manuellement « {matched_custom_brand.title()} »"
     website_domain = extract_domain(website_url) or ""
     for chain_domain in CHAIN_WEBSITE_DOMAINS:
         if website_domain == chain_domain or website_domain.endswith(f".{chain_domain}"):

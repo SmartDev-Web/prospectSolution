@@ -315,3 +315,13 @@ legend { font-weight: 600; padding: 0 6px; }
   .prospect-table tr { padding: 8px 0; border-bottom: 1px solid var(--color-border); }
   .prospect-table td { border: none; padding: 2px 12px; }
 }
+.problem-title { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.problem-action { margin-left: auto; border: none; background: transparent; color: var(--color-text-muted); cursor: pointer; font: inherit; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.problem-action:hover { background: var(--color-surface-muted); color: var(--color-text); }
+.edited-badge { background: var(--color-warning-background); border: 1px solid var(--color-warning-border); border-radius: 8px; padding: 6px 10px; margin: 8px 0; font-size: 13px; }
+.summary-block textarea { margin: 6px 0; }
+.custom-finding-form { margin: 10px 0; }
+.custom-finding-form summary { cursor: pointer; font-weight: 600; }
+.dismissed-block { opacity: 0.85; }
+.dismissed-finding { display: flex; align-items: center; gap: 8px; padding: 4px 0; text-decoration: line-through; color: var(--color-text-muted); }
+.dismissed-finding .problem-action { text-decoration: none; }

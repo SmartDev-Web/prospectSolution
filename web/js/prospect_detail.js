@@ -74,6 +74,19 @@ function startScan(prospect) {
   return runProspectAction(requestJson("/api/scans", { method: "POST", body: { prospect_ids: [prospect.id] } }), "Analyse lancée : la fiche se mettra à jour automatiquement.", false);
 }
 
+async function markAsChain(prospect) {
+  const suggestedBrand = prospect.name.replace(/\s+(saint|st|ste|le|la|les|de|du)\b.*$/i, "").trim() || prospect.name;
+  const brand = window.prompt("Nom de l'enseigne à exclure (tous les prospects qui la contiennent seront supprimés) :", suggestedBrand);
+  if (!brand || brand.trim().length < 2) return;
+  try {
+    const result = await requestJson(`/api/prospects/${prospect.id}/mark-chain`, { method: "POST", body: { brand: brand.trim() } });
+    closeProspectDetail();
+    showToast(`« ${result.brand} » ajoutée aux chaînes : ${result.removed} prospect(s) retiré(s).`);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 function renderActionBar(prospect) {
   const actionLinks = [
     prospect.phone ? createElement("a", { className: "button primary small", href: `tel:${prospect.phone.replace(/\s/g, "")}`, text: `📞 ${prospect.phone}` }) : null,
@@ -82,6 +95,12 @@ function renderActionBar(prospect) {
     externalLink(googleMapsUrl(prospect), prospect.google_maps_url ? "🗺️ Fiche Google Maps" : "🗺️ Chercher sur Maps", "button secondary small"),
     prospect.website_url ? externalLink(prospect.website_url, "🌐 Ouvrir le site", "button secondary small") : null,
     externalLink(officialRegistryUrl(prospect), "🏛️ Fiche officielle", "button secondary small"),
+    createElement("button", {
+      className: "button secondary small",
+      text: "🏬 C'est une chaîne",
+      title: "Classe ce prospect comme chaîne ou franchise : il est supprimé, ainsi que tous ceux de la même enseigne, et l'enseigne sera ignorée aux prochaines recherches",
+      onClick: () => markAsChain(prospect),
+    }),
     (prospect.sources || []).includes("google_maps") ? null : createElement("button", {
       className: "button secondary small",
       text: prospect.google_maps_checked ? "🗺️ Recompléter via Google Maps" : "🗺️ Compléter via Google Maps",
@@ -243,7 +262,8 @@ function renderSynthesis(report, scan) {
       createElement("div", { className: "offer-title", text: offer.title }),
       createElement("div", { text: offer.pitch }),
     ]) : null,
-    createElement("p", { text: report.summary }),
+    renderEditedBadge(report),
+    renderSummaryEditor(report),
     (report.call_arguments || []).length ? createElement("div", { className: "panel" }, [
       createElement("strong", { text: "🎯 Vos 3 meilleurs arguments au téléphone" }),
       createElement("ol", {}, report.call_arguments.map((argument) => createElement("li", { text: argument }))),
@@ -265,15 +285,114 @@ function renderSynthesis(report, scan) {
   ];
 }
 
+const CATEGORY_OPTIONS = {
+  design: "Design", mobile: "Mobile", performance: "Vitesse", conversion: "Conversion", seo: "Référencement Google",
+  security: "Sécurité", legal: "Légal", content: "Contenu", technology: "Technique", sector: "Métier", availability: "Disponibilité",
+};
+
+function currentOverrides() {
+  const overrides = detailState.prospect.diagnosis_overrides || {};
+  return { dismissed_codes: [...(overrides.dismissed_codes || [])], custom_findings: [...(overrides.custom_findings || [])], summary: overrides.summary || null };
+}
+
+// Every correction goes through this call: the server stores it, then rebuilds score and report from it
+function saveDiagnosisOverrides(overrides, successMessage) {
+  return runProspectAction(requestJson(`/api/prospects/${detailState.prospect.id}/diagnosis`, { method: "PUT", body: overrides }), successMessage);
+}
+
+function renderEditedBadge(report) {
+  return report.manually_edited ? createElement("div", { className: "edited-badge", text: "✏️ Diagnostic corrigé manuellement : vos corrections sont conservées lors des prochaines analyses." }) : null;
+}
+
+function renderSummaryEditor(report) {
+  const summaryText = createElement("p", { text: report.summary });
+  const editButton = createElement("button", { className: "button ghost small", text: "✏️ Modifier le résumé" });
+  const container = createElement("div", { className: "summary-block" }, [summaryText, editButton]);
+  editButton.addEventListener("click", () => {
+    const summaryInput = createElement("textarea", { rows: 4 }, report.summary || "");
+    container.replaceChildren(summaryInput, createElement("div", { className: "action-bar" }, [
+      createElement("button", { className: "button primary small", text: "Enregistrer", onClick: () => saveDiagnosisOverrides({ ...currentOverrides(), summary: summaryInput.value.trim() || null }, "Résumé enregistré.") }),
+      createElement("button", { className: "button ghost small", text: "Revenir au résumé automatique", onClick: () => saveDiagnosisOverrides({ ...currentOverrides(), summary: null }, "Résumé automatique rétabli.") }),
+    ]));
+    summaryInput.focus();
+  });
+  return container;
+}
+
+function renderCustomFindingForm() {
+  const titleInput = createElement("input", { placeholder: "Ex. : quelques défauts d'affichage sur mobile" });
+  const impactInput = createElement("textarea", { rows: 2, placeholder: "Pourquoi c'est un problème pour l'entreprise (facultatif)" });
+  const severitySelect = createElement("select", {}, Object.entries(SEVERITY_LABELS).map(([severityKey, severityLabel]) => createElement("option", { value: severityKey, text: severityLabel, selected: severityKey === "minor" })));
+  const categorySelect = createElement("select", {}, Object.entries(CATEGORY_OPTIONS).map(([categoryKey, categoryLabel]) => createElement("option", { value: categoryKey, text: categoryLabel })));
+  return createElement("details", { className: "panel custom-finding-form" }, [
+    createElement("summary", { text: "➕ Ajouter un point au diagnostic" }),
+    createElement("label", {}, ["Titre", titleInput]),
+    createElement("label", {}, ["Explication", impactInput]),
+    createElement("div", { className: "crm-block" }, [createElement("label", {}, ["Gravité", severitySelect]), createElement("label", {}, ["Catégorie", categorySelect])]),
+    createElement("button", {
+      className: "button primary small",
+      text: "Ajouter",
+      onClick: () => {
+        if (titleInput.value.trim().length < 2) {
+          showToast("Donnez un titre au point à ajouter.", "error");
+          return;
+        }
+        const overrides = currentOverrides();
+        overrides.custom_findings.push({ title: titleInput.value.trim(), impact: impactInput.value.trim(), severity: severitySelect.value, category: categorySelect.value });
+        saveDiagnosisOverrides(overrides, "Point ajouté au diagnostic.");
+      },
+    }),
+  ]);
+}
+
+function renderProblem(problem) {
+  const removeButton = createElement("button", {
+    className: "problem-action",
+    title: problem.custom ? "Supprimer ce point" : "Retirer ce point : l'analyse s'est trompée",
+    text: problem.custom ? "🗑️ Supprimer" : "✖ Retirer",
+    onClick: () => {
+      const overrides = currentOverrides();
+      if (problem.custom) overrides.custom_findings.splice(Number(problem.code.replace("custom_", "")), 1);
+      else overrides.dismissed_codes.push(problem.code);
+      saveDiagnosisOverrides(overrides, "Diagnostic mis à jour, score recalculé.");
+    },
+  });
+  return createElement("div", { className: `problem ${problem.severity}` }, [
+    createElement("div", { className: "problem-title" }, [
+      createElement("span", { className: `tag ${problem.severity}`, text: SEVERITY_LABELS[problem.severity] }), " ",
+      createElement("span", { className: "tag", text: problem.category_label }), " ",
+      problem.custom ? createElement("span", { className: "tag", text: "Ajouté par vous" }) : null, " ",
+      problem.title,
+      removeButton,
+    ]),
+    problem.impact ? createElement("div", { text: problem.impact }) : null,
+    problem.recommendation ? createElement("div", { className: "muted small-text", text: `➜ ${problem.recommendation}` }) : null,
+  ]);
+}
+
 function renderDiagnosis(report) {
-  const problemElements = (report.problems || []).map((problem) => createElement("div", { className: `problem ${problem.severity}` }, [
-    createElement("div", { className: "problem-title" }, [createElement("span", { className: `tag ${problem.severity}`, text: SEVERITY_LABELS[problem.severity] }), " ", createElement("span", { className: "tag", text: problem.category_label }), " ", problem.title]),
-    createElement("div", { text: problem.impact }),
-    createElement("div", { className: "muted small-text", text: `➜ ${problem.recommendation}` }),
-  ]));
+  const dismissedFindings = report.dismissed_findings || [];
   return [
+    renderEditedBadge(report),
     createElement("h3", { text: `Ce qui ne va pas (${(report.problems || []).length})` }),
-    ...problemElements,
+    createElement("p", { className: "muted small-text", text: "L'analyse s'est trompée ? Retirez le point concerné : le score et la fiche sont recalculés, et la correction reste valable aux prochaines analyses." }),
+    ...(report.problems || []).map(renderProblem),
+    renderCustomFindingForm(),
+    dismissedFindings.length ? createElement("div", { className: "dismissed-block" }, [
+      createElement("h3", { text: `Points retirés (${dismissedFindings.length})` }),
+      ...dismissedFindings.map((finding) => createElement("div", { className: "dismissed-finding" }, [
+        createElement("span", { text: finding.title }),
+        createElement("button", {
+          className: "problem-action",
+          text: "↩ Rétablir",
+          onClick: () => {
+            const overrides = currentOverrides();
+            overrides.dismissed_codes = overrides.dismissed_codes.filter((code) => code !== finding.code);
+            saveDiagnosisOverrides(overrides, "Point rétabli.");
+          },
+        }),
+      ])),
+    ]) : null,
     createElement("h3", { text: "Plan d'amélioration" }),
     createElement("ol", {}, (report.improvements || []).map((improvement) => createElement("li", { text: improvement }))),
   ];

@@ -309,6 +309,13 @@ class ProspectRepository:
             self.merge_prospects(duplicate_group)
         return sum(len(duplicate_group) - 1 for duplicate_group in duplicate_groups)
 
+    def save_diagnosis_overrides(self, prospect_identifier: int, overrides: dict[str, Any]) -> dict[str, Any] | None:
+        """Store the corrections the user made to the analyzer's diagnosis."""
+        if self.get_prospect(prospect_identifier) is None:
+            return None
+        self._write_changes(prospect_identifier, {"diagnosis_overrides": json.dumps(overrides, ensure_ascii=False)})
+        return self.get_prospect(prospect_identifier)
+
     def reject_website(self, prospect_identifier: int) -> dict[str, Any] | None:
         """Discard a wrongly matched website and remember its domain so that it is never proposed again."""
         prospect_row = self.get_prospect(prospect_identifier)
@@ -321,12 +328,12 @@ class ProspectRepository:
             "website_check_done": 1,
         })
 
-    def remove_chains(self) -> list[str]:
+    def remove_chains(self, custom_brands: list[str] | None = None) -> list[str]:
         """Delete every prospect recognised as a chain or franchise and return their names."""
         removed_names = []
         for prospect_row in get_database().fetch_all("SELECT * FROM prospects"):
             names = [name for name in (prospect_row["name"], prospect_row["legal_name"]) if name]
-            if detect_chain(names, prospect_row["website_url"], prospect_row["brand"], prospect_row["establishment_count"]):
+            if detect_chain(names, prospect_row["website_url"], prospect_row["brand"], prospect_row["establishment_count"], custom_brands):
                 get_database().execute("DELETE FROM prospects WHERE id = ?", (prospect_row["id"],))
                 removed_names.append(prospect_row["name"])
         if removed_names:

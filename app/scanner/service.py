@@ -14,12 +14,13 @@ from app.database import get_database, utc_now_iso
 from app.events import event_bus
 from app.prospects import prospect_repository
 from app.reports.llm_writer import enhance_report_with_language_model
-from app.reports.rules import build_missing_website_findings, build_rule_based_report
+from app.reports.diagnosis import finalize_diagnosis
+from app.reports.rules import build_missing_website_findings
 from app.reports.visual_review import assess_screenshot
 from app.scanner.analyzers import AnalysisInput, analyze_website
-from app.scanner.catalog import build_finding, compute_opportunity_level, compute_score
+from app.scanner.catalog import build_finding
 from app.scanner.crawler import crawl_internal_pages
-from app.scanner.http_probe import check_http_redirect, fetch_homepage, inspect_certificate
+from app.scanner.http_probe import HttpProbeResult, check_http_redirect, fetch_homepage, inspect_certificate
 from app.scanner.lighthouse import run_lighthouse
 from app.scanner.renderer import RenderResult, render_website
 from app.sectors import get_sector
@@ -63,6 +64,14 @@ def store_scan(prospect_identifier: int, scan_values: dict[str, Any]) -> int:
     return cursor.lastrowid
 
 
+MINIMUM_BROWSER_WORDS = 20
+
+
+async def return_value(value: Any) -> Any:
+    """Wrap an already known value so that it can join an asyncio.gather call."""
+    return value
+
+
 BLOCKED_PAGE_MARKERS = ("just a moment", "checking your browser", "attention required", "access denied", "verifier que vous etes humain", "vérifiez que vous êtes humain", "captcha")
 
 
@@ -89,13 +98,35 @@ def find_render_problem(render: RenderResult, probe_html: str) -> str | None:
     return None
 
 
+async def confirm_with_browser(probe: HttpProbeResult, website_url: str, file_prefix: str) -> RenderResult | None:
+    """Open a site that refused the raw request in a real browser; return the render when visitors do see the site."""
+    render = await render_website(probe.final_url or website_url, file_prefix)
+    browser_status = render.desktop.status_code
+    if render.error or (browser_status is not None and browser_status >= 400) or find_render_problem(render, "") is not None:
+        return None
+    if visible_word_count(render.rendered_html) < MINIMUM_BROWSER_WORDS:
+        return None
+    probe.final_url = render.final_url or probe.final_url or website_url
+    probe.status_code = browser_status or 200
+    probe.html = render.rendered_html
+    probe.error = None
+    return render
+
+
 async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     """Collect every observation on a website and analyse it."""
     website_url = prospect["website_url"]
+    file_prefix = f"{prospect['id']}_{int(time.time())}"
     probe = await fetch_homepage(website_url)
+    browser_confirmed_render = None
+    raw_request_refusal = None
     if not probe.reachable:
-        unreachable_finding = build_finding("site_unreachable", detail=probe.error or "erreur inconnue")
-        return {"reachable": False, "final_url": probe.final_url, "http_status": probe.status_code, "findings": [unreachable_finding], "strengths": [], "metrics": {"error": probe.error}, "contacts": {}}
+        # Hosting protections often refuse scripted requests while serving real browsers: only a browser failure proves an outage
+        raw_request_refusal = probe.error
+        browser_confirmed_render = await confirm_with_browser(probe, website_url, file_prefix)
+        if browser_confirmed_render is None:
+            unreachable_finding = build_finding("site_unreachable", detail=probe.error or "erreur inconnue")
+            return {"reachable": False, "final_url": probe.final_url, "http_status": probe.status_code, "findings": [unreachable_finding], "strengths": [], "metrics": {"error": probe.error}, "contacts": {}}
     final_url = probe.final_url or website_url
     parsed_final_url = urlparse(final_url)
     https_alternative_reachable = False
@@ -105,7 +136,7 @@ async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, 
         probe.http_redirects_to_https = await check_http_redirect(parsed_final_url.netloc)
     certificate, render, favicon_found, crawled_pages = await asyncio.gather(
         inspect_certificate(final_url),
-        render_website(final_url, f"{prospect['id']}_{int(time.time())}"),
+        return_value(browser_confirmed_render) if browser_confirmed_render else render_website(final_url, file_prefix),
         url_answers(f"{parsed_final_url.scheme}://{parsed_final_url.netloc}/favicon.ico"),
         crawl_internal_pages(final_url, probe.html, int(settings["crawl_internal_pages"])),
     )
@@ -129,6 +160,8 @@ async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, 
     ))
     if visual_assessment:
         analysis_output.metrics["visual_assessment"] = visual_assessment
+    if raw_request_refusal:
+        analysis_output.metrics["raw_request_refused"] = f"{raw_request_refusal} : le site a été vérifié avec un vrai navigateur"
     if render_problem or render.mobile_error:
         analysis_output.metrics["render_error"] = render_problem or f"mobile : {render.mobile_error}"
     return {
@@ -152,15 +185,13 @@ async def scan_prospect(prospect_identifier: int) -> dict[str, Any] | None:
     settings = load_settings()
     if prospect.get("website_url"):
         scan_values = await audit_reachable_website(prospect, settings)
-        score = compute_score(scan_values["findings"], scan_values["metrics"].get("unmeasured_categories")) if scan_values["reachable"] else 0
-        opportunity_level = compute_opportunity_level(score, has_website=True, reachable=scan_values["reachable"])
     else:
         scan_values = {"reachable": False, "findings": build_missing_website_findings(prospect), "strengths": [], "metrics": {}, "contacts": {}}
-        score = None
-        opportunity_level = compute_opportunity_level(None, has_website=False)
+    score, opportunity_level, report = finalize_diagnosis(prospect, scan_values["findings"], scan_values["strengths"], scan_values["metrics"], scan_values["reachable"], settings)
     scan_values["score"] = score
-    report = build_rule_based_report(prospect, scan_values["findings"], scan_values["strengths"], score, opportunity_level, settings, scan_values["metrics"].get("unmeasured_categories"))
     scan_values["report"] = await enhance_report_with_language_model(prospect, report)
+    if (prospect.get("diagnosis_overrides") or {}).get("summary"):
+        scan_values["report"]["summary"] = prospect["diagnosis_overrides"]["summary"]
     store_scan(prospect_identifier, scan_values)
     contacts = scan_values.get("contacts") or {}
     contact_changes = {
@@ -170,4 +201,24 @@ async def scan_prospect(prospect_identifier: int) -> dict[str, Any] | None:
     }
     prospect_repository.apply_scan_result(prospect_identifier, score, opportunity_level, contact_changes)
     event_bus.publish("scan.completed", {"prospect_id": prospect_identifier, "score": score, "opportunity_level": opportunity_level})
+    return prospect_repository.get_prospect_detail(prospect_identifier)
+
+
+def edit_diagnosis(prospect_identifier: int, overrides: dict[str, Any]) -> dict[str, Any] | None:
+    """Store the user's corrections and rebuild the latest diagnosis, score and report from them."""
+    prospect = prospect_repository.save_diagnosis_overrides(prospect_identifier, overrides)
+    if prospect is None:
+        return None
+    latest_scan = get_database().fetch_one("SELECT * FROM scans WHERE prospect_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1", (prospect_identifier,))
+    if latest_scan is None:
+        return prospect_repository.get_prospect_detail(prospect_identifier)
+    previous_report = latest_scan["report"] or {}
+    score, opportunity_level, report = finalize_diagnosis(
+        prospect, latest_scan["findings"] or [], previous_report.get("strengths") or [], latest_scan["metrics"] or {}, bool(latest_scan["reachable"]), load_settings(),
+    )
+    get_database().execute(
+        "UPDATE scans SET score = ?, report = ? WHERE id = ?",
+        (score, json.dumps(report, ensure_ascii=False), latest_scan["id"]),
+    )
+    prospect_repository.apply_scan_result(prospect_identifier, score, opportunity_level, {})
     return prospect_repository.get_prospect_detail(prospect_identifier)

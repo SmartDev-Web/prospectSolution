@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS prospects (
     website_confidence TEXT,
     website_evidence TEXT,
     rejected_domains TEXT NOT NULL DEFAULT '[]',
+    diagnosis_overrides TEXT NOT NULL DEFAULT '{}',
+
     social_url TEXT,
     manager_name TEXT,
     brand TEXT,
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 """
-JSON_COLUMNS = {"sources", "metrics", "findings", "contacts", "report", "rejected_domains"}
+JSON_COLUMNS = {"sources", "metrics", "findings", "contacts", "report", "rejected_domains", "diagnosis_overrides"}
 # Columns introduced after the first release, added in place to existing databases
 ADDED_PROSPECT_COLUMNS = {
     "website_confidence": "TEXT",
@@ -102,6 +104,7 @@ ADDED_PROSPECT_COLUMNS = {
     "establishment_count": "INTEGER",
     "google_maps_checked": "INTEGER NOT NULL DEFAULT 0",
     "employee_minimum": "INTEGER",
+    "diagnosis_overrides": "TEXT NOT NULL DEFAULT '{}'",
 }
 
 

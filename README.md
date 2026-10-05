@@ -44,7 +44,9 @@ Commencez par l'onglet **⚙️ Réglages** : renseignez votre prénom, votre vi
 
 **Doublons fusionnés automatiquement** après chaque recherche (désactivable dans les réglages). Deux fiches sont considérées identiques si elles partagent le SIREN (plusieurs établissements d'une même entreprise deviennent une seule fiche), l'identifiant Google Maps, le site web, le téléphone avec un nom proche, ou un nom très proche à la même adresse. La fusion garde la fiche la plus ancienne et y rapatrie coordonnées, sources, notes, statut, appels et analyses. Le bouton **🔗 Fusionner les doublons** relance la détection, et cocher plusieurs lignes fait apparaître **🔗 Fusionner la sélection** pour regrouper des fiches à la main.
 
-**Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 250 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le bouton **🧹 Retirer les chaînes** nettoie une base existante.
+**Une chaîne passe entre les mailles ?** Dans sa fiche, le bouton **🏬 C'est une chaîne** demande le nom de l'enseigne (Kiabi par exemple), supprime tous les prospects qui la portent et l'ajoute à la liste des enseignes exclues des prochaines recherches. Cette liste se modifie aussi dans **⚙️ Réglages → Chaînes et franchises**.
+
+**Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 390 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le bouton **🧹 Retirer les chaînes** nettoie une base existante.
 
 #### Comment l'outil trouve les sites web
 1. **Déduction du nom de domaine** : variantes du nom et de la ville × extensions `.fr`, `.com`, `.eu`, `.net`, `.org`, `.info`, toutes testées en parallèle.
@@ -75,6 +77,18 @@ L'analyse va plus loin qu'une simple page d'accueil :
 - elle relève les **points forts** (site rapide, à jour, réservation en ligne, bonne réputation Google…) pour commencer l'appel par un compliment sincère.
 
 **Notation :** le score est la somme de 7 catégories pondérées (sécurité 15, mobile 20, vitesse 15, design 20, conversion 20, référencement 7, légal 3). Chaque catégorie a un plancher : dix détails de référencement ne peuvent pas couler un site moderne. Un problème critique (pas de HTTPS, site non mobile, design très daté…) plafonne le score à 40. Une catégorie non mesurable (page impossible à afficher) est exclue du calcul au lieu de compter comme parfaite. Moins de 50 : 🔥 chaud, moins de 70 : tiède, au-delà : froid.
+
+### Corriger un diagnostic
+L'analyse peut se tromper. Dans l'onglet **Diagnostic** d'une fiche :
+- **✖ Retirer** un point erroné : le score, l'opportunité, l'offre, le script d'appel et l'e-mail sont recalculés sans lui ;
+- **➕ Ajouter un point** que vous avez constaté vous-même (titre, explication, gravité, catégorie) ;
+- **✏️ Modifier le résumé** depuis l'onglet Synthèse ;
+- **↩ Rétablir** un point retiré.
+
+Ces corrections sont conservées lors des analyses suivantes. Un site qui refuse les requêtes automatiques (protection de l'hébergeur renvoyant une erreur 503 ou 403) est désormais ouvert dans un vrai navigateur avant d'être déclaré inaccessible.
+
+### Analyser tous les prospects
+Le bouton **🔄 Analyser tous les prospects** relance tout en une tâche : recherche des sites manquants, réanalyse de toutes les fiches (nouveaux contacts, site refait, score à jour), puis fusion des doublons révélés (même téléphone ou même site trouvés entre-temps).
 
 ### La liste des prospects
 Cliquez sur un en-tête de colonne (score, entreprise, ville, effectif, téléphone, site, opportunité, statut, relance) pour trier, et cliquez à nouveau pour inverser l'ordre. L'effectif provient du registre officiel.
