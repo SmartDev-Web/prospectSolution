@@ -129,3 +129,15 @@ def test_user_defined_chain_removes_every_matching_prospect():
     prospect_repository.upsert_prospect(build_registry_candidate(name="LOLITA BOUTIQUE LATTES", legal_name="SARL LOLA", siret="22233344400011", latitude=43.70))
     assert prospect_repository.remove_chains([]) == []
     assert prospect_repository.remove_chains(["lolita"]) == ["LOLITA BOUTIQUE LATTES"]
+
+
+def test_list_can_be_filtered_around_a_place():
+    prospect_repository._insert_prospect(ProspectCandidate(name="Centre", source="manual", latitude=43.6108, longitude=3.8767))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Quatre km", source="manual", latitude=43.6468, longitude=3.8767))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Vingt km", source="manual", latitude=43.7908, longitude=3.8767))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Sans coordonnées", source="manual", city="Montpellier"))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Ailleurs sans coordonnées", source="manual", city="Nîmes"))
+    area = {"center_latitude": 43.6108, "center_longitude": 3.8767, "radius_km": 5, "area_city": "Montpellier"}
+    rows = prospect_repository.list_prospects({**area, "sort": "distance"})
+    assert [(row["name"], row["distance_km"]) for row in rows] == [("Centre", 0.0), ("Quatre km", 4.0), ("Sans coordonnées", None)]
+    assert [row["name"] for row in prospect_repository.list_prospects({**area, "sort": "distance", "sort_direction": "desc"})][:2] == ["Quatre km", "Centre"]

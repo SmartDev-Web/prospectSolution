@@ -93,6 +93,8 @@ Le bouton **🔄 Analyser tous les prospects** relance tout en une tâche : rech
 ### La liste des prospects
 Cliquez sur un en-tête de colonne (score, entreprise, ville, effectif, téléphone, site, opportunité, statut, relance) pour trier, et cliquez à nouveau pour inverser l'ordre. L'effectif provient du registre officiel.
 
+**Filtrer autour d'un lieu :** tapez une ville ou une adresse dans le champ « 📍 Autour de… », choisissez une suggestion et réglez le **Rayon** (5 km par défaut). Seuls les prospects situés dans ce rayon restent affichés, avec une colonne **Distance** triée du plus proche au plus loin. Les fiches sans coordonnées GPS sont conservées si leur ville correspond, et rangées en fin de liste. La croix ✕ retire le filtre. L'export CSV respecte le filtre et ajoute la distance.
+
 ### La fiche prospect
 Dans **⚙️ Réglages → Fiche client**, cochez ce qui doit s'afficher : effectif recensé, coordonnées (téléphone, adresse, e-mail, site web), synthèse, diagnostic, script d'appel, e-mail, technique, historique.
 
@@ -142,6 +144,14 @@ Sans IA, les fiches sont rédigées par un moteur de règles fiable et instantan
    - **Modèle :** `qwen2.5:7b-instruct` (environ 4,7 Go, tient dans les 6 Go de la 1060 et écrit correctement en français) ;
    - enregistrez, cliquez **▶️ Démarrer Ollama**, puis **⬇️ Télécharger le modèle**.
 3. Le statut affiche la carte réellement utilisée par Ollama. Vérifiez que c'est bien la 1060.
+
+La liste propose **Choix automatique** (Ollama répartit le modèle sur toutes les cartes listées entre parenthèses), puis **Carte 1**, **Carte 2**… pour forcer une carte précise.
+
+**La 1060 n'apparaît pas dans la liste ?** C'est que le pilote NVIDIA ne la voit pas : ouvrez une invite de commandes et tapez `nvidia-smi -L`. Si une seule carte s'affiche, aucun logiciel ne pourra utiliser la 1060 pour le calcul. La page Réglages affiche alors un avertissement avec la cause détectée par Windows :
+- **code 22** : carte désactivée dans le Gestionnaire de périphériques → clic droit, « Activer » ;
+- **code 43 / 10** : pilote planté ou carte mal alimentée → réinstallation propre du pilote (DDU), câbles PCIe et riser à vérifier ;
+- **code 12** : ressources insuffisantes → activer « Above 4G decoding » dans le BIOS ;
+- **aucun code** : la carte est vue par Windows mais ignorée par le pilote → réinstaller le pilote NVIDIA complet (il gère les deux cartes, pas besoin d'en installer deux).
 
 L'application lance son propre serveur Ollama sur le port 11435, avec `CUDA_VISIBLE_DEVICES` pointé sur l'identifiant unique de la 1060. Ce serveur **ne voit que cette carte** : la 1660 Ti reste entièrement disponible pour Windows et vos jeux. Si l'application Ollama classique tourne déjà sur le port 11434, pas de conflit : les modèles téléchargés sont partagés.
 

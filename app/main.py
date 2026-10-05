@@ -16,7 +16,7 @@ from app.events import event_bus
 from app.geo import geocode
 from app.http_client import OpenDataError
 from app.jobs import JobContext, job_manager
-from app.llm.gpu import list_graphics_cards
+from app.llm.gpu import describe_graphics_cards
 from app.llm.ollama import ollama_service
 from app.models import (
     ActivityCreate,
@@ -116,11 +116,16 @@ def read_prospect_filters(
     source: str | None = None,
     sort: str | None = None,
     sort_direction: str | None = None,
-) -> dict[str, str | None]:
+    center_latitude: float | None = None,
+    center_longitude: float | None = None,
+    radius_km: float | None = None,
+    area_city: str | None = None,
+) -> dict[str, str | float | None]:
     """Collect the prospect list filters shared by the list and export endpoints."""
     return {
         "status": status, "sector_key": sector_key, "opportunity_level": opportunity_level, "website": website,
         "search_text": search_text, "source": source, "sort": sort, "sort_direction": sort_direction,
+        "center_latitude": center_latitude, "center_longitude": center_longitude, "radius_km": radius_km, "area_city": area_city,
     }
 
 
@@ -308,7 +313,7 @@ async def update_settings(changes: dict[str, Any]) -> dict:
 
 @application.get("/api/system")
 async def get_system_capabilities() -> dict:
-    return {"lighthouse_installed": find_lighthouse_executable() is not None, "graphics_cards": await list_graphics_cards()}
+    return {"lighthouse_installed": find_lighthouse_executable() is not None, **await describe_graphics_cards()}
 
 
 @application.get("/api/llm/status")

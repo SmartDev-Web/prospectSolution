@@ -33,6 +33,11 @@
           <option value="with">Avec site</option>
           <option value="without">Sans site</option>
         </select>
+        <div class="area-filter">
+          <div class="area-filter-input" id="area-filter-input"></div>
+          <label class="radius-field">Rayon <input type="number" id="area-radius" value="5" min="0.5" max="200" step="0.5"> km</label>
+          <button class="button ghost small" id="area-clear" type="button" hidden title="Retirer le filtre de lieu">✕</button>
+        </div>
         <select id="filter-source">
           <option value="">Toutes les sources</option>
           <option value="government_registry">Registre INSEE</option>
@@ -229,6 +234,7 @@
           <label>URL du serveur existant<input name="llm_external_url"></label>
           <label>Exécutable Ollama<input name="ollama_executable"></label>
         </div>
+        <div id="gpu-diagnosis"></div>
         <div class="llm-status" id="llm-status"></div>
         <div class="toolbar">
           <button class="button secondary" type="button" id="llm-start">▶️ Démarrer Ollama</button>

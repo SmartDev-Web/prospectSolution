@@ -49,14 +49,27 @@ async function loadSystemCapabilities(selectedGpuUuid) {
   const systemCapabilities = await requestJson("/api/system");
   document.getElementById("lighthouse-availability").textContent = systemCapabilities.lighthouse_installed ? "(installé)" : "(non installé : npm install -g lighthouse)";
   const gpuSelect = document.getElementById("gpu-select");
+  const graphicsCards = systemCapabilities.graphics_cards;
+  const automaticLabel = graphicsCards.length
+    ? `Choix automatique (Ollama répartit sur : ${graphicsCards.map((graphicsCard) => graphicsCard.name.replace(/^NVIDIA (GeForce )?/, "")).join(" + ")})`
+    : "Aucune carte NVIDIA utilisable détectée";
   gpuSelect.replaceChildren(
-    createElement("option", { value: "", text: systemCapabilities.graphics_cards.length ? "Choix automatique d'Ollama" : "Aucune carte NVIDIA détectée" }),
-    ...systemCapabilities.graphics_cards.map((graphicsCard) => createElement("option", {
+    createElement("option", { value: "", text: automaticLabel }),
+    ...graphicsCards.map((graphicsCard, cardPosition) => createElement("option", {
       value: graphicsCard.uuid,
       selected: graphicsCard.uuid === selectedGpuUuid,
-      text: `#${graphicsCard.index} ${graphicsCard.name} · ${Math.round(graphicsCard.memory_total_megabytes / 1024)} Go · ${graphicsCard.memory_used_megabytes} Mo utilisés`,
+      text: [
+        `Carte ${cardPosition + 1} : ${graphicsCard.name}`,
+        graphicsCard.memory_total_megabytes ? `${Math.round(graphicsCard.memory_total_megabytes / 1024)} Go` : null,
+        graphicsCard.memory_used_megabytes !== null ? `${graphicsCard.memory_used_megabytes} Mo utilisés` : null,
+      ].filter(Boolean).join(" · "),
     })),
   );
+  const ignoredCards = systemCapabilities.ignored_graphics_cards || [];
+  document.getElementById("gpu-diagnosis").replaceChildren(...ignoredCards.map((ignoredCard) => createElement("div", { className: "callout warning" }, [
+    createElement("strong", { text: `⚠️ ${ignoredCard.name} n'est pas utilisable : ` }),
+    ignoredCard.problem,
+  ])));
 }
 
 async function runLanguageModelAction(actionPath) {

@@ -1,6 +1,7 @@
 // Search forms (open data and Google Maps) with a shared map based area picker.
-import { buildQueryString, requestJson } from "./api.js";
+import { requestJson } from "./api.js";
 import { createElement, isoDateInDays, showToast } from "./dom.js";
+import { createPlaceAutocomplete } from "./place_autocomplete.js";
 import { referenceData } from "./store.js";
 
 const DEFAULT_AREA = { label: "Montpellier", latitude: 43.6108, longitude: 3.8767, radius_km: 5 };
@@ -86,12 +87,9 @@ function createMap(pickerKey, onCenterPicked) {
 function createAreaPicker(pickerKey) {
   searchAreas[pickerKey] = { ...DEFAULT_AREA };
   const pickerContainer = document.querySelector(`[data-area-picker="${pickerKey}"]`);
-  const addressInput = createElement("input", { type: "search", value: DEFAULT_AREA.label, placeholder: "Ville ou adresse (ex. Montpellier, 34000…)", autocomplete: "off" });
-  const suggestionList = createElement("div", { className: "suggestions", hidden: true });
   const radiusValue = createElement("strong", { text: `${DEFAULT_AREA.radius_km} km` });
   const radiusInput = createElement("input", { type: "range", min: 0.5, max: 50, step: 0.5, value: DEFAULT_AREA.radius_km });
   const coordinatesHint = createElement("div", { className: "muted" });
-  let pendingGeocodeRequest = null;
   const refreshCoordinatesHint = () => {
     const searchArea = searchAreas[pickerKey];
     coordinatesHint.textContent = `Centre : ${searchArea.latitude.toFixed(4)}, ${searchArea.longitude.toFixed(4)} · cliquez sur la carte pour déplacer le centre`;
@@ -102,32 +100,10 @@ function createAreaPicker(pickerKey) {
     refreshCoordinatesHint();
     updateMap(pickerKey);
   };
-  addressInput.addEventListener("input", async () => {
-    const query = addressInput.value.trim();
-    if (pendingGeocodeRequest) pendingGeocodeRequest.abort();
-    if (query.length < 3) {
-      suggestionList.hidden = true;
-      return;
-    }
-    pendingGeocodeRequest = new AbortController();
-    try {
-      const places = await requestJson(`/api/geocode${buildQueryString({ query })}`, { signal: pendingGeocodeRequest.signal });
-      suggestionList.replaceChildren(...places.map((place) => createElement("button", {
-        type: "button",
-        text: place.label,
-        onClick: () => {
-          addressInput.value = place.label;
-          suggestionList.hidden = true;
-          setCenter(place.latitude, place.longitude, place.city || place.label);
-        },
-      })));
-      suggestionList.hidden = places.length === 0;
-    } catch (error) {
-      if (error.name !== "AbortError") showToast(error.message, "error");
-    }
-  });
-  addressInput.addEventListener("blur", (blurEvent) => {
-    if (!suggestionList.contains(blurEvent.relatedTarget)) suggestionList.hidden = true;
+  const { input: addressInput, suggestionList } = createPlaceAutocomplete({
+    initialValue: DEFAULT_AREA.label,
+    placeholder: "Ville ou adresse (ex. Montpellier, 34000…)",
+    onPick: (place) => setCenter(place.latitude, place.longitude, place.city || place.label),
   });
   radiusInput.addEventListener("input", () => {
     searchAreas[pickerKey].radius_km = Number(radiusInput.value);

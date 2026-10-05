@@ -5,6 +5,7 @@ import { OPPORTUNITY_LABELS, SOURCE_LABELS, STATUS_LABELS } from "./labels.js";
 import { renderScoreBadge } from "./components.js";
 import { liveEvents } from "./live.js";
 import { openProspectDetail } from "./prospect_detail.js";
+import { createPlaceAutocomplete } from "./place_autocomplete.js";
 import { createCoalescedRefresher, isSectionVisible, referenceData, settingsEvents } from "./store.js";
 
 const FILTER_FIELDS = {
@@ -21,6 +22,7 @@ const TABLE_COLUMNS = [
   { key: "score", label: "Score", sort: "score" },
   { key: "name", label: "Entreprise", sort: "name" },
   { key: "city", label: "Ville", sort: "city" },
+  { key: "distance", label: "Distance", sort: "distance", requiresArea: true },
   { key: "employees", label: "Effectif", sort: "employees", setting: "sheet_show_employees" },
   { key: "phone", label: "Téléphone", sort: "phone" },
   { key: "website", label: "Site web", sort: "website" },
@@ -31,18 +33,50 @@ const TABLE_COLUMNS = [
 ];
 const NATURAL_SORT_DIRECTIONS = { employees: "desc", recent: "desc" };
 const sortState = { key: "opportunity", direction: "asc" };
+const areaFilter = { active: false, latitude: null, longitude: null, radiusKm: 5, city: "" };
 const selectedProspectIdentifiers = new Set();
 let displayedProspects = [];
 let viewIsVisible = true;
 let listIsStale = false;
 
 function visibleColumns() {
-  return TABLE_COLUMNS.filter((column) => !column.setting || isSectionVisible(column.setting));
+  return TABLE_COLUMNS.filter((column) => (!column.setting || isSectionVisible(column.setting)) && (!column.requiresArea || areaFilter.active));
+}
+
+function readAreaFilter() {
+  if (!areaFilter.active) return {};
+  return { center_latitude: areaFilter.latitude, center_longitude: areaFilter.longitude, radius_km: areaFilter.radiusKm, area_city: areaFilter.city };
+}
+
+function initializeAreaFilter() {
+  const radiusInput = document.getElementById("area-radius");
+  const clearButton = document.getElementById("area-clear");
+  const { input, suggestionList } = createPlaceAutocomplete({
+    placeholder: "📍 Autour de… (ville ou adresse)",
+    onPick: (place) => {
+      Object.assign(areaFilter, { active: true, latitude: place.latitude, longitude: place.longitude, city: place.city || "" });
+      Object.assign(sortState, { key: "distance", direction: "asc" });
+      clearButton.hidden = false;
+      requestProspectRefresh();
+    },
+  });
+  document.getElementById("area-filter-input").replaceChildren(input, suggestionList);
+  radiusInput.addEventListener("change", () => {
+    areaFilter.radiusKm = Math.max(0.5, Number(radiusInput.value) || 5);
+    if (areaFilter.active) requestProspectRefresh();
+  });
+  clearButton.addEventListener("click", () => {
+    Object.assign(areaFilter, { active: false, latitude: null, longitude: null, city: "" });
+    if (sortState.key === "distance") Object.assign(sortState, { key: "opportunity", direction: "asc" });
+    input.value = "";
+    clearButton.hidden = true;
+    requestProspectRefresh();
+  });
 }
 
 function readFilters() {
   const filters = Object.fromEntries(Object.entries(FILTER_FIELDS).map(([filterName, elementIdentifier]) => [filterName, document.getElementById(elementIdentifier).value]));
-  return { ...filters, sort: sortState.key, sort_direction: sortState.direction };
+  return { ...filters, ...readAreaFilter(), sort: sortState.key, sort_direction: sortState.direction };
 }
 
 function changeSort(sortKey) {
@@ -133,6 +167,7 @@ function renderProspectRow(prospect) {
       createElement("div", { className: "source-hint", text: `via ${(prospect.sources || []).map((source) => SOURCE_LABELS[source] || source).join(" + ")}` }),
     ]),
     city: createElement("td", { text: prospect.city || "" }),
+    distance: createElement("td", { className: "employees-cell", text: prospect.distance_km === null || prospect.distance_km === undefined ? "—" : `${String(prospect.distance_km).replace(".", ",")} km` }),
     employees: createElement("td", { className: "employees-cell", text: prospect.employee_range || "—" }),
     phone: createElement("td", {}, phoneCell),
     website: createElement("td", {}, websiteCell),
@@ -213,6 +248,7 @@ export function setProspectsViewVisibility(isVisible) {
 
 export function initializeProspectsView() {
   populateFilterOptions();
+  initializeAreaFilter();
   Object.values(FILTER_FIELDS).forEach((elementIdentifier) => {
     const filterElement = document.getElementById(elementIdentifier);
     filterElement.addEventListener(filterElement.tagName === "INPUT" ? "input" : "change", requestProspectRefresh);

@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import math
 from typing import Any
 
 from app.chains import detect_chain
@@ -13,6 +14,7 @@ from app.models import CALL_OUTCOME_STATUSES, PROSPECT_STATUSES, ActivityCreate,
 from app.text_utils import company_name_similarity, extract_domain, normalize_company_name, normalize_phone_number, normalize_website_url
 
 STATUS_ORDER = list(PROSPECT_STATUSES)
+KILOMETRES_PER_LATITUDE_DEGREE = 111.32
 NEARBY_MATCH_DISTANCE_KM = 0.25
 SAME_POSTAL_CODE_SIMILARITY = 0.9
 NEARBY_SIMILARITY = 0.78
@@ -53,9 +55,38 @@ def build_order_clause(sort_key: str | None, sort_direction: str | None) -> str:
     return f"({expression}) IS NULL, {expression} {direction}{secondary_order}, id DESC"
 CSV_COLUMNS = (
     "id", "name", "legal_name", "category_label", "sector_key", "address", "postal_code", "city", "phone", "email",
-    "website_url", "social_url", "employee_range", "manager_name", "score", "opportunity_level", "status", "next_follow_up", "google_rating",
+    "website_url", "social_url", "employee_range", "manager_name", "distance_km", "score", "opportunity_level", "status", "next_follow_up", "google_rating",
     "google_review_count", "siret", "creation_date", "notes",
 )
+
+
+def read_search_area(filters: dict[str, Any]) -> tuple[float, float, float] | None:
+    """Return the circle requested by the location filter, when complete."""
+    try:
+        center_latitude, center_longitude, radius_km = (float(filters[key]) for key in ("center_latitude", "center_longitude", "radius_km"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (center_latitude, center_longitude, radius_km) if radius_km > 0 else None
+
+
+def filter_rows_by_distance(
+    prospect_rows: list[dict[str, Any]], center_latitude: float, center_longitude: float, radius_km: float, sort_by_distance: bool, descending: bool,
+) -> list[dict[str, Any]]:
+    """Keep the prospects inside the circle, annotated with their distance to its center."""
+    kept_rows = []
+    for prospect_row in prospect_rows:
+        if prospect_row["latitude"] is None or prospect_row["longitude"] is None:
+            prospect_row["distance_km"] = None
+            kept_rows.append(prospect_row)
+            continue
+        distance_km = haversine_distance_km(center_latitude, center_longitude, prospect_row["latitude"], prospect_row["longitude"])
+        if distance_km <= radius_km:
+            prospect_row["distance_km"] = round(distance_km, 1)
+            kept_rows.append(prospect_row)
+    if sort_by_distance:
+        located_rows = sorted((row for row in kept_rows if row["distance_km"] is not None), key=lambda row: row["distance_km"], reverse=descending)
+        kept_rows = located_rows + [row for row in kept_rows if row["distance_km"] is None]
+    return kept_rows
 
 
 def candidate_names(candidate: ProspectCandidate) -> list[str]:
@@ -387,9 +418,25 @@ class ProspectRepository:
         if filters.get("source"):
             conditions.append("sources LIKE :source")
             parameters["source"] = f'%"{filters["source"]}"%'
+        search_area = read_search_area(filters)
+        if search_area:
+            center_latitude, center_longitude, radius_km = search_area
+            latitude_margin = radius_km / KILOMETRES_PER_LATITUDE_DEGREE
+            longitude_margin = radius_km / (KILOMETRES_PER_LATITUDE_DEGREE * max(math.cos(math.radians(center_latitude)), 0.1))
+            # The bounding box keeps the query fast; prospects without coordinates are matched by their city name
+            conditions.append("((latitude BETWEEN :minimum_latitude AND :maximum_latitude AND longitude BETWEEN :minimum_longitude AND :maximum_longitude) OR (latitude IS NULL AND city LIKE :area_city))")
+            parameters.update({
+                "minimum_latitude": center_latitude - latitude_margin, "maximum_latitude": center_latitude + latitude_margin,
+                "minimum_longitude": center_longitude - longitude_margin, "maximum_longitude": center_longitude + longitude_margin,
+                "area_city": filters.get("area_city") or "\u0000",
+            })
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        order_clause = build_order_clause(filters.get("sort"), filters.get("sort_direction"))
-        return get_database().fetch_all(f"SELECT * FROM prospects {where_clause} ORDER BY {order_clause} LIMIT 5000", parameters)
+        sort_key = filters.get("sort")
+        order_clause = build_order_clause(None if sort_key == "distance" else sort_key, filters.get("sort_direction"))
+        prospect_rows = get_database().fetch_all(f"SELECT * FROM prospects {where_clause} ORDER BY {order_clause} LIMIT 5000", parameters)
+        if not search_area:
+            return prospect_rows
+        return filter_rows_by_distance(prospect_rows, *search_area, sort_by_distance=sort_key == "distance", descending=(filters.get("sort_direction") or "").lower() == "desc")
 
     def list_due_follow_ups(self, until_date: str) -> list[dict[str, Any]]:
         """Return prospects whose follow-up date is due, plus fresh hot prospects to call."""
