@@ -2,12 +2,12 @@
 import { showToast } from "./dom.js";
 import { requestFollowUpRefresh, initializeFollowUpsView } from "./follow_ups_view.js";
 import { initializeJobsView } from "./jobs_view.js";
-import { connectLiveEvents } from "./live.js";
+import { connectLiveEvents, liveEvents } from "./live.js";
 import { initializeProspectDetail } from "./prospect_detail.js";
 import { initializeProspectsView, setProspectsViewVisibility } from "./prospects_view.js";
 import { initializeSearchViews, refreshMapLayout } from "./search_views.js";
 import { initializeSettingsView } from "./settings_view.js";
-import { loadReferenceData } from "./store.js";
+import { applySettings, loadReferenceData } from "./store.js";
 
 const MAP_VIEWS = { "open-data": "open-data", "google-maps": "google-maps" };
 
@@ -22,6 +22,7 @@ function showView(viewName) {
 
 async function startApplication() {
   initializeJobsView();
+  liveEvents.addEventListener("settings.updated", (settingsEvent) => applySettings(settingsEvent.detail));
   connectLiveEvents();
   await loadReferenceData();
   initializeProspectDetail();

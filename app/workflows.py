@@ -31,6 +31,15 @@ def resolve_sectors(sector_keys: list[str]) -> list[Sector]:
 CONFIDENCE_LABELS = {"high": "certain", "medium": "à vérifier"}
 
 
+def merge_duplicates_if_enabled(context: JobContext) -> None:
+    """Merge the prospects describing the same business when the setting asks for it."""
+    if not load_settings()["auto_merge_duplicates"]:
+        return
+    merged_count = prospect_repository.merge_all_duplicates()
+    if merged_count:
+        context.log(f"Doublons fusionnés automatiquement : {merged_count}.")
+
+
 def build_business_identity(prospect: dict) -> BusinessIdentity:
     """Gather everything that helps recognise the website of a stored prospect."""
     return BusinessIdentity(
@@ -93,6 +102,7 @@ def start_website_discovery_job(prospect_identifiers: list[int]):
     """Start a background job searching again the websites of prospects that have none."""
     async def run(context: JobContext) -> None:
         found_count = await discover_missing_websites(context, prospect_identifiers, include_already_checked=True)
+        merge_duplicates_if_enabled(context)
         context.set_result(websites_found=found_count)
         context.log(f"Terminé : {found_count} site(s) trouvé(s) sur {len(prospect_identifiers)} prospect(s).")
     return job_manager.start("website_discovery", f"Recherche de sites ({len(prospect_identifiers)} prospects)", run)
@@ -190,6 +200,7 @@ def start_open_data_search(search_request: OpenDataSearchRequest):
         if search_request.discover_websites:
             found_websites = await discover_missing_websites(context, touched_identifiers)
             context.log(f"Sites web découverts automatiquement : {found_websites}.")
+        merge_duplicates_if_enabled(context)
         context.set_result(prospects=len(touched_identifiers), created=created_count, websites_found=found_websites)
         context.log(f"Terminé : {len(touched_identifiers)} prospects ({created_count} nouveaux).")
         if search_request.auto_scan and touched_identifiers:
@@ -228,6 +239,7 @@ def start_google_maps_search(search_request: GoogleMapsSearchRequest):
                 # Google Maps is authoritative: a listing without website means the business has none
                 prospect_repository.record_website_check(prospect_identifier, None)
         context.log(chain_filter.summary())
+        merge_duplicates_if_enabled(context)
         context.set_result(prospects=len(touched_identifiers), created=created_count)
         context.log(f"Terminé : {len(touched_identifiers)} fiches ({created_count} nouvelles).")
         if search_request.auto_scan and touched_identifiers:
@@ -268,6 +280,7 @@ def start_google_maps_enrichment(prospect_identifiers: list[int]):
             prospect_repository.enrich_from_listing(lookup.reference, candidate)
             completed_count += int(candidate is not None)
             context.advance(f"{lookup.query} : " + (f"trouvé ({candidate.phone or 'sans téléphone'}, {candidate.website_url or 'sans site'})" if candidate else "aucune fiche correspondante"))
+        merge_duplicates_if_enabled(context)
         context.set_result(completed=completed_count)
         context.log(f"Terminé : {completed_count} fiche(s) complétée(s) sur {len(lookups)}.")
     return job_manager.start("google_maps_enrichment", f"Complétion Google Maps ({len(prospect_identifiers)} prospects)", run)

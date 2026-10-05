@@ -80,3 +80,45 @@ def test_chain_cleanup_removes_franchises_only():
     prospect_repository.upsert_prospect(build_registry_candidate())
     prospect_repository.upsert_prospect(build_registry_candidate(name="SUBWAY SUBAUNES", legal_name="SUBAUNES", siret="11122233300011", latitude=43.70))
     assert prospect_repository.remove_chains() == ["SUBWAY SUBAUNES"]
+
+
+def test_duplicates_are_detected_and_merged_with_their_history():
+    first_identifier, _ = prospect_repository.upsert_prospect(build_registry_candidate())
+    prospect_repository.add_activity(first_identifier, ActivityCreate(kind="call", outcome="callback", next_follow_up="2030-02-01"))
+    second_identifier = prospect_repository._insert_prospect(ProspectCandidate(
+        name="Boucherie Brume Castelnau", source="google_maps", latitude=43.6371, longitude=3.9101, phone="04 67 00 00 00",
+        website_url="https://boucherie-brume.fr/", google_rating=4.6, google_review_count=80,
+    ))
+    third_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Pizzeria Napoli", source="openstreetmap", latitude=43.6372, longitude=3.9102))
+    assert prospect_repository.merge_all_duplicates() == 1
+    merged_prospect = prospect_repository.get_prospect_detail(first_identifier)
+    assert prospect_repository.get_prospect(second_identifier) is None
+    assert prospect_repository.get_prospect(third_identifier) is not None
+    assert merged_prospect["website_url"] == "https://boucherie-brume.fr/"
+    assert merged_prospect["google_review_count"] == 80
+    assert merged_prospect["status"] == "callback"
+    assert merged_prospect["sources"] == ["government_registry", "google_maps"]
+    assert len(merged_prospect["activities"]) == 1
+
+
+def test_manual_merge_keeps_the_oldest_prospect():
+    first_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Atelier Dupont", source="openstreetmap"))
+    second_identifier = prospect_repository._insert_prospect(ProspectCandidate(name="Dupont Menuiserie", source="google_maps", phone="0601020304"))
+    merged_prospect = prospect_repository.merge_prospects([second_identifier, first_identifier])
+    assert merged_prospect["id"] == first_identifier and merged_prospect["phone"] == "0601020304"
+
+
+def test_list_can_be_sorted_by_any_column_in_both_directions():
+    prospect_repository._insert_prospect(ProspectCandidate(name="Beta", source="manual", city="Lattes", employee_minimum=10))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Alpha", source="manual", city="Mauguio", employee_minimum=0))
+    prospect_repository._insert_prospect(ProspectCandidate(name="Gamma", source="manual"))
+    assert [row["name"] for row in prospect_repository.list_prospects({"sort": "name"})] == ["Alpha", "Beta", "Gamma"]
+    assert [row["name"] for row in prospect_repository.list_prospects({"sort": "name", "sort_direction": "desc"})] == ["Gamma", "Beta", "Alpha"]
+    assert [row["name"] for row in prospect_repository.list_prospects({"sort": "employees"})] == ["Beta", "Alpha", "Gamma"]
+    assert [row["name"] for row in prospect_repository.list_prospects({"sort": "city", "sort_direction": "desc"})] == ["Alpha", "Beta", "Gamma"]
+
+
+def test_establishments_of_one_company_become_one_prospect():
+    first_identifier, _ = prospect_repository.upsert_prospect(build_registry_candidate(siret="91884780700024", name="MULTANI"))
+    second_identifier, created = prospect_repository.upsert_prospect(build_registry_candidate(siret="91884780700032", name="MULTANI", latitude=43.60, longitude=3.86))
+    assert not created and first_identifier == second_identifier

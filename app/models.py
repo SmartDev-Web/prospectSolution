@@ -43,6 +43,7 @@ class ProspectCandidate:
     establishment_count: int | None = None
     creation_date: str | None = None
     employee_range: str | None = None
+    employee_minimum: int | None = None
     google_rating: float | None = None
     google_review_count: int | None = None
     google_maps_url: str | None = None
@@ -101,6 +102,11 @@ class GoogleMapsEnrichmentRequest(BaseModel):
     prospect_ids: list[int] = []
     all_without_phone: bool = False
     limit: int = Field(default=30, ge=1, le=200)
+
+
+class MergeRequest(BaseModel):
+    """Prospects to merge into the oldest of them."""
+    prospect_ids: list[int] = Field(min_length=2)
 
 
 class ProspectCreate(BaseModel):

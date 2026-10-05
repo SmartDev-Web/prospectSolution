@@ -13,15 +13,21 @@ import {
   WEBSITE_ORIGIN_LABELS,
 } from "./labels.js";
 import { liveEvents } from "./live.js";
+import { isSectionVisible, settingsEvents } from "./store.js";
 
+// Each tab can be hidden from the settings, to keep the sheet focused on what the user works with
 const SUB_TABS = [
-  { key: "synthesis", label: "🎯 Synthèse" },
-  { key: "diagnosis", label: "🩺 Diagnostic" },
-  { key: "script", label: "📞 Script d'appel" },
-  { key: "email", label: "✉️ E-mail" },
-  { key: "technical", label: "🔧 Technique" },
-  { key: "history", label: "🕘 Historique" },
+  { key: "synthesis", label: "🎯 Synthèse", setting: "sheet_show_synthesis" },
+  { key: "diagnosis", label: "🩺 Diagnostic", setting: "sheet_show_diagnosis" },
+  { key: "script", label: "📞 Script d'appel", setting: "sheet_show_script" },
+  { key: "email", label: "✉️ E-mail", setting: "sheet_show_email" },
+  { key: "technical", label: "🔧 Technique", setting: "sheet_show_technical" },
+  { key: "history", label: "🕘 Historique", setting: "sheet_show_history" },
 ];
+
+function visibleSubTabs() {
+  return SUB_TABS.filter((subTab) => isSectionVisible(subTab.setting));
+}
 const detailState = { prospect: null, activeSubTab: "synthesis", renderPendingUntilBlur: false };
 
 function drawerElement() {
@@ -141,17 +147,31 @@ function renderFact(label, value) {
   return createElement("div", { className: "fact" }, [createElement("div", { className: "fact-label", text: label }), createElement("div", {}, value)]);
 }
 
-function renderFacts(prospect) {
-  return createElement("div", { className: "fact-grid" }, [
-    renderFact("Dirigeant", prospect.manager_name ? `👤 ${prospect.manager_name}` : null),
-    renderFact("E-mail", prospect.email ? createElement("a", { href: `mailto:${prospect.email}`, text: prospect.email }) : null),
-    renderFact("Adresse", prospect.address),
+function renderFactSection(title, facts) {
+  const presentFacts = facts.filter(Boolean);
+  if (!presentFacts.length) return null;
+  return createElement("div", { className: "fact-section" }, [createElement("h3", { text: title }), createElement("div", { className: "fact-grid" }, presentFacts)]);
+}
+
+function renderContacts(prospect) {
+  if (!isSectionVisible("sheet_show_contacts")) return null;
+  return renderFactSection("📇 Coordonnées", [
+    renderFact("Téléphone", prospect.phone ? createElement("a", { href: `tel:${prospect.phone.replace(/\s/g, "")}`, text: prospect.phone }) : createElement("span", { className: "muted", text: "Non renseigné" })),
+    renderFact("E-mail", prospect.email ? createElement("a", { href: `mailto:${prospect.email}`, text: prospect.email }) : createElement("span", { className: "muted", text: "Non renseigné" })),
+    renderFact("Adresse", prospect.address || [prospect.postal_code, prospect.city].filter(Boolean).join(" ")),
+    renderFact("Site web", prospect.website_url ? externalLink(prospect.website_url, readableHost(prospect.website_url)) : createElement("span", { className: "muted", text: "Aucun site détecté" })),
     renderFact("Réseau social", prospect.social_url ? externalLink(prospect.social_url, readableHost(prospect.social_url)) : null),
+  ]);
+}
+
+function renderCompanyFacts(prospect) {
+  return renderFactSection("🏢 Entreprise", [
+    renderFact("Dirigeant", prospect.manager_name ? `👤 ${prospect.manager_name}` : null),
+    isSectionVisible("sheet_show_employees") ? renderFact("Effectif recensé", prospect.employee_range || createElement("span", { className: "muted", text: "Non communiqué" })) : null,
     renderFact("Avis Google", prospect.google_rating ? `★ ${String(prospect.google_rating).replace(".", ",")} (${prospect.google_review_count || 0} avis)` : null),
     renderFact("Raison sociale", prospect.legal_name !== prospect.name ? prospect.legal_name : null),
     renderFact("SIRET", prospect.siret),
     renderFact("Création", formatDate(prospect.creation_date)),
-    renderFact("Effectif", prospect.employee_range),
   ]);
 }
 
@@ -334,7 +354,9 @@ function renderSubView(prospect) {
 function renderDetail() {
   const prospect = detailState.prospect;
   if (!prospect) return;
-  const subTabButtons = SUB_TABS.map((subTab) => createElement("button", {
+  const subTabs = visibleSubTabs();
+  if (subTabs.length && !subTabs.some((subTab) => subTab.key === detailState.activeSubTab)) detailState.activeSubTab = subTabs[0].key;
+  const subTabButtons = subTabs.map((subTab) => createElement("button", {
     className: `sub-tab ${subTab.key === detailState.activeSubTab ? "active" : ""}`,
     text: subTab.label,
     onClick: () => {
@@ -355,10 +377,11 @@ function renderDetail() {
     renderOrigin(prospect),
     renderActionBar(prospect),
     renderWebsiteBlock(prospect),
-    renderFacts(prospect),
+    renderContacts(prospect),
+    renderCompanyFacts(prospect),
     renderPipelineBlock(prospect),
-    createElement("div", { className: "sub-tabs" }, subTabButtons),
-    createElement("div", { className: "sub-view" }, renderSubView(prospect)),
+    subTabs.length ? createElement("div", { className: "sub-tabs" }, subTabButtons) : null,
+    subTabs.length ? createElement("div", { className: "sub-view" }, renderSubView(prospect)) : null,
     createElement("button", {
       className: "button ghost small",
       text: "🗑️ Supprimer ce prospect",
@@ -383,7 +406,7 @@ async function reloadOpenProspect() {
 
 export async function openProspectDetail(prospectIdentifier) {
   detailState.prospect = await requestJson(`/api/prospects/${prospectIdentifier}`);
-  detailState.activeSubTab = "synthesis";
+  detailState.activeSubTab = (visibleSubTabs()[0] || SUB_TABS[0]).key;
   drawerElement().hidden = false;
   document.getElementById("drawer-backdrop").hidden = false;
   renderDetail();
@@ -407,6 +430,7 @@ export function initializeProspectDetail() {
       reloadOpenProspect();
     }
   });
+  settingsEvents.addEventListener("changed", () => renderDetail());
   liveEvents.addEventListener("scan.completed", (scanEvent) => {
     if (detailState.prospect && scanEvent.detail.prospect_id === detailState.prospect.id) reloadOpenProspect();
   });

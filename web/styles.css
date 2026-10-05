@@ -152,6 +152,13 @@ legend { font-weight: 600; padding: 0 6px; }
 .prospect-table th, .prospect-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
 .prospect-table th { font-size: 12px; text-transform: uppercase; color: var(--color-text-muted); background: var(--color-surface-muted); position: sticky; top: 0; }
 .prospect-table tbody tr { cursor: pointer; }
+.prospect-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.prospect-table th.sortable:hover { color: var(--color-text); }
+.prospect-table th.sortable.active { color: var(--color-primary); }
+.sort-arrow { font-size: 11px; opacity: 0.7; }
+.selection-cell { width: 34px; }
+.selection-cell input { width: auto; }
+.employees-cell { font-size: 12px; color: var(--color-text-muted); white-space: nowrap; }
 .prospect-table tbody tr:hover { background: var(--color-surface-muted); }
 .prospect-name { font-weight: 600; }
 .prospect-category { color: var(--color-text-muted); font-size: 12px; }
@@ -199,8 +206,11 @@ legend { font-weight: 600; padding: 0 6px; }
 .suggestions button:hover { background: var(--color-surface-muted); }
 .radius-row { display: flex; align-items: center; gap: 10px; }
 .radius-row input[type="range"] { flex: 1; }
-.sector-group { margin: 6px 0; }
-.sector-group-title { font-size: 12px; text-transform: uppercase; color: var(--color-text-muted); margin-top: 8px; }
+.sector-filter { margin: 4px 0 8px; }
+.sector-group { margin: 2px 0; border-bottom: 1px solid var(--color-border); padding: 4px 0; }
+.sector-group summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style-position: inside; }
+.sector-group .group-label { font-weight: 600; margin: 4px 0; display: inline-flex; }
+.sector-option { padding-left: 22px; }
 .option-grid, .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 14px; }
 .settings-form { max-width: 980px; }
 .add-prospect-form { margin-bottom: 12px; }
@@ -221,6 +231,7 @@ legend { font-weight: 600; padding: 0 6px; }
 .drawer-header { display: flex; gap: 12px; align-items: flex-start; }
 .drawer-header h2 { margin: 0; font-size: 20px; }
 .drawer-close { margin-left: auto; }
+.fact-section h3 { font-size: 13px; text-transform: uppercase; color: var(--color-text-muted); margin: 12px 0 2px; }
 .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 16px; margin: 12px 0; }
 .fact { overflow-wrap: anywhere; }
 .fact-label { color: var(--color-text-muted); font-size: 12px; }

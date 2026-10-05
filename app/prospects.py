@@ -6,11 +6,13 @@ from typing import Any
 
 from app.chains import detect_chain
 from app.database import get_database, utc_now_iso
+from app.deduplication import SAME_PHONE_SIMILARITY, find_duplicate_groups
 from app.events import event_bus
 from app.geo import haversine_distance_km
-from app.models import CALL_OUTCOME_STATUSES, ActivityCreate, ProspectCandidate
+from app.models import CALL_OUTCOME_STATUSES, PROSPECT_STATUSES, ActivityCreate, ProspectCandidate
 from app.text_utils import company_name_similarity, extract_domain, normalize_company_name, normalize_phone_number, normalize_website_url
 
+STATUS_ORDER = list(PROSPECT_STATUSES)
 NEARBY_MATCH_DISTANCE_KM = 0.25
 SAME_POSTAL_CODE_SIMILARITY = 0.9
 NEARBY_SIMILARITY = 0.78
@@ -19,20 +21,39 @@ COORDINATE_SEARCH_MARGIN_DEGREES = 0.004
 MERGEABLE_FIELDS = (
     "legal_name", "siret", "naf_code", "sector_key", "category_label", "company_category", "address", "postal_code",
     "city", "latitude", "longitude", "phone", "email", "website_url", "website_origin", "website_confidence", "social_url",
-    "manager_name", "brand", "establishment_count", "creation_date", "employee_range", "google_rating", "google_review_count", "google_maps_url", "google_place_key",
+    "manager_name", "brand", "establishment_count", "creation_date", "employee_range", "employee_minimum", "google_rating", "google_review_count", "google_maps_url", "google_place_key",
 )
 # Values coming from these sources are refreshed on every import because they reflect live data
 REFRESHED_FIELDS_BY_SOURCE = {"google_maps": ("google_rating", "google_review_count", "google_maps_url")}
+OPPORTUNITY_RANK_SQL = "CASE opportunity_level WHEN 'no_website' THEN 0 WHEN 'hot' THEN 1 WHEN 'warm' THEN 2 WHEN 'cold' THEN 3 END"
+STATUS_RANK_SQL = (
+    "CASE status WHEN 'new' THEN 0 WHEN 'to_call' THEN 1 WHEN 'called_no_answer' THEN 2 WHEN 'callback' THEN 3 WHEN 'interested' THEN 4 "
+    "WHEN 'meeting' THEN 5 WHEN 'quote_sent' THEN 6 WHEN 'won' THEN 7 WHEN 'lost' THEN 8 WHEN 'not_interested' THEN 9 END"
+)
+# Sort key: (SQL expression, natural direction); empty values always come last
 SORTABLE_COLUMNS = {
-    "opportunity": "CASE opportunity_level WHEN 'no_website' THEN 0 WHEN 'hot' THEN 1 WHEN 'warm' THEN 2 WHEN 'cold' THEN 3 ELSE 4 END, score ASC",
-    "score": "score IS NULL, score ASC",
-    "name": "name COLLATE NOCASE ASC",
-    "recent": "created_at DESC",
-    "follow_up": "next_follow_up IS NULL, next_follow_up ASC",
+    "opportunity": (OPPORTUNITY_RANK_SQL, "ASC"),
+    "score": ("score", "ASC"),
+    "name": ("name COLLATE NOCASE", "ASC"),
+    "city": ("city COLLATE NOCASE", "ASC"),
+    "phone": ("phone", "ASC"),
+    "website": ("website_domain", "ASC"),
+    "employees": ("employee_minimum", "DESC"),
+    "status": (STATUS_RANK_SQL, "ASC"),
+    "follow_up": ("next_follow_up", "ASC"),
+    "recent": ("created_at", "DESC"),
 }
+
+
+def build_order_clause(sort_key: str | None, sort_direction: str | None) -> str:
+    """Translate a sort request into an ORDER BY clause keeping empty values at the end."""
+    expression, natural_direction = SORTABLE_COLUMNS.get(sort_key or "opportunity", SORTABLE_COLUMNS["opportunity"])
+    direction = sort_direction.upper() if (sort_direction or "").upper() in ("ASC", "DESC") else natural_direction
+    secondary_order = ", score ASC" if (sort_key or "opportunity") == "opportunity" else ""
+    return f"({expression}) IS NULL, {expression} {direction}{secondary_order}, id DESC"
 CSV_COLUMNS = (
     "id", "name", "legal_name", "category_label", "sector_key", "address", "postal_code", "city", "phone", "email",
-    "website_url", "social_url", "score", "opportunity_level", "status", "next_follow_up", "google_rating",
+    "website_url", "social_url", "employee_range", "manager_name", "score", "opportunity_level", "status", "next_follow_up", "google_rating",
     "google_review_count", "siret", "creation_date", "notes",
 )
 
@@ -66,9 +87,13 @@ class ProspectRepository:
             if matching_row:
                 return matching_row
         if candidate.siret:
-            matching_row = database.fetch_one("SELECT * FROM prospects WHERE siret = ?", (candidate.siret,))
+            matching_row = database.fetch_one("SELECT * FROM prospects WHERE substr(siret, 1, 9) = ? ORDER BY id LIMIT 1", (candidate.siret[:9],))
             if matching_row:
                 return matching_row
+        if candidate.phone:
+            for prospect_row in database.fetch_all("SELECT * FROM prospects WHERE phone = ?", (candidate.phone,)):
+                if best_name_similarity(candidate, prospect_row) >= SAME_PHONE_SIMILARITY:
+                    return prospect_row
         website_domain = extract_domain(candidate.website_url)
         if website_domain:
             for prospect_row in database.fetch_all("SELECT * FROM prospects WHERE website_domain = ?", (website_domain,)):
@@ -234,10 +259,55 @@ class ProspectRepository:
     def list_ids_without_phone(self, limit: int) -> list[int]:
         """Return prospects with no phone number never looked up on Google Maps, best opportunities first."""
         rows = get_database().fetch_all(
-            f"SELECT id FROM prospects WHERE phone IS NULL AND google_maps_checked = 0 AND sources NOT LIKE '%google_maps%' ORDER BY {SORTABLE_COLUMNS['opportunity']}, id LIMIT ?",
+            f"SELECT id FROM prospects WHERE phone IS NULL AND google_maps_checked = 0 AND sources NOT LIKE '%google_maps%' ORDER BY {build_order_clause('opportunity', None)} LIMIT ?",
             (limit,),
         )
         return [row["id"] for row in rows]
+
+    def merge_prospects(self, prospect_identifiers: list[int]) -> dict[str, Any] | None:
+        """Merge several prospects into the oldest one: fields, sources, notes, pipeline, calls and scans."""
+        prospect_rows = [row for row in (self.get_prospect(identifier) for identifier in sorted(set(prospect_identifiers))) if row]
+        if len(prospect_rows) < 2:
+            return prospect_rows[0] if prospect_rows else None
+        target_row, *merged_rows = prospect_rows
+        changes: dict[str, Any] = {}
+        merged_values = dict(target_row)
+        for merged_row in merged_rows:
+            for field_name in (*MERGEABLE_FIELDS, "website_domain", "website_evidence"):
+                if merged_values.get(field_name) in (None, "") and merged_row.get(field_name) not in (None, ""):
+                    merged_values[field_name] = changes[field_name] = merged_row[field_name]
+            if (merged_row.get("last_scan_at") or "") > (merged_values.get("last_scan_at") or ""):
+                for field_name in ("score", "opportunity_level", "last_scan_at"):
+                    merged_values[field_name] = changes[field_name] = merged_row[field_name]
+            if STATUS_ORDER.index(merged_row["status"]) > STATUS_ORDER.index(merged_values["status"]):
+                merged_values["status"] = changes["status"] = merged_row["status"]
+            follow_up_dates = [date for date in (merged_values.get("next_follow_up"), merged_row.get("next_follow_up")) if date]
+            if follow_up_dates and min(follow_up_dates) != merged_values.get("next_follow_up"):
+                merged_values["next_follow_up"] = changes["next_follow_up"] = min(follow_up_dates)
+        changes["sources"] = json.dumps(list(dict.fromkeys(source for row in prospect_rows for source in (row["sources"] or []))))
+        changes["rejected_domains"] = json.dumps(list(dict.fromkeys(domain for row in prospect_rows for domain in (row["rejected_domains"] or []))))
+        changes["notes"] = "\n".join(dict.fromkeys(row["notes"].strip() for row in prospect_rows if (row["notes"] or "").strip()))
+        changes["website_check_done"] = max(row["website_check_done"] for row in prospect_rows)
+        changes["google_maps_checked"] = max(row["google_maps_checked"] for row in prospect_rows)
+        merged_identifiers = [row["id"] for row in merged_rows]
+        placeholders = ", ".join("?" for _ in merged_identifiers)
+        database = get_database()
+        with database.transaction() as connection:
+            connection.execute(f"UPDATE scans SET prospect_id = ? WHERE prospect_id IN ({placeholders})", (target_row["id"], *merged_identifiers))
+            connection.execute(f"UPDATE activities SET prospect_id = ? WHERE prospect_id IN ({placeholders})", (target_row["id"], *merged_identifiers))
+            connection.execute(f"DELETE FROM prospects WHERE id IN ({placeholders})", tuple(merged_identifiers))
+        self._write_changes(target_row["id"], changes)
+        for merged_identifier in merged_identifiers:
+            event_bus.publish("prospect.deleted", {"id": merged_identifier, "merged_into": target_row["id"]})
+        event_bus.publish("prospect.updated", self.get_prospect(target_row["id"]))
+        return self.get_prospect(target_row["id"])
+
+    def merge_all_duplicates(self) -> int:
+        """Merge every group of prospects describing the same business; return how many prospects disappeared."""
+        duplicate_groups = find_duplicate_groups(get_database().fetch_all("SELECT * FROM prospects"))
+        for duplicate_group in duplicate_groups:
+            self.merge_prospects(duplicate_group)
+        return sum(len(duplicate_group) - 1 for duplicate_group in duplicate_groups)
 
     def reject_website(self, prospect_identifier: int) -> dict[str, Any] | None:
         """Discard a wrongly matched website and remember its domain so that it is never proposed again."""
@@ -311,8 +381,8 @@ class ProspectRepository:
             conditions.append("sources LIKE :source")
             parameters["source"] = f'%"{filters["source"]}"%'
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        order_clause = SORTABLE_COLUMNS.get(filters.get("sort") or "opportunity", SORTABLE_COLUMNS["opportunity"])
-        return get_database().fetch_all(f"SELECT * FROM prospects {where_clause} ORDER BY {order_clause}, id DESC LIMIT 5000", parameters)
+        order_clause = build_order_clause(filters.get("sort"), filters.get("sort_direction"))
+        return get_database().fetch_all(f"SELECT * FROM prospects {where_clause} ORDER BY {order_clause} LIMIT 5000", parameters)
 
     def list_due_follow_ups(self, until_date: str) -> list[dict[str, Any]]:
         """Return prospects whose follow-up date is due, plus fresh hot prospects to call."""

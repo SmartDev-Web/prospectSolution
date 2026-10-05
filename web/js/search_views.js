@@ -7,19 +7,54 @@ const DEFAULT_AREA = { label: "Montpellier", latitude: 43.6108, longitude: 3.876
 const searchAreas = {};
 const areaMaps = {};
 
+function refreshGroupState(groupElement) {
+  const sectorCheckboxes = [...groupElement.querySelectorAll('input[name="sector_keys"]')];
+  const checkedCount = sectorCheckboxes.filter((checkbox) => checkbox.checked).length;
+  const groupCheckbox = groupElement.querySelector(".group-checkbox");
+  groupCheckbox.checked = checkedCount === sectorCheckboxes.length;
+  groupCheckbox.indeterminate = checkedCount > 0 && checkedCount < sectorCheckboxes.length;
+  groupElement.querySelector(".group-count").textContent = checkedCount ? `${checkedCount}/${sectorCheckboxes.length}` : "";
+}
+
 function renderSectorCheckboxes(container, defaultCheckedKeys) {
   const sectorsByGroup = new Map();
   referenceData.sectors.forEach((sector) => {
     if (!sectorsByGroup.has(sector.group)) sectorsByGroup.set(sector.group, []);
     sectorsByGroup.get(sector.group).push(sector);
   });
-  container.replaceChildren(...[...sectorsByGroup.entries()].map(([groupLabel, groupSectors]) => createElement("div", { className: "sector-group" }, [
-    createElement("div", { className: "sector-group-title", text: groupLabel }),
-    ...groupSectors.map((sector) => createElement("label", { className: "checkbox" }, [
-      createElement("input", { type: "checkbox", name: "sector_keys", value: sector.key, checked: defaultCheckedKeys.includes(sector.key) }),
-      sector.label,
-    ])),
-  ])));
+  const filterInput = createElement("input", { type: "search", className: "sector-filter", placeholder: "Filtrer les secteurs (ex. avocat, plombier, logiciel…)" });
+  const groupElements = [...sectorsByGroup.entries()].map(([groupLabel, groupSectors]) => {
+    const groupCheckbox = createElement("input", { type: "checkbox", className: "group-checkbox" });
+    const groupElement = createElement("details", { className: "sector-group", open: groupSectors.some((sector) => defaultCheckedKeys.includes(sector.key)) }, [
+      createElement("summary", {}, [
+        createElement("label", { className: "checkbox group-label", onClick: (clickEvent) => clickEvent.stopPropagation() }, [groupCheckbox, groupLabel]),
+        createElement("span", { className: "group-count muted" }),
+      ]),
+      ...groupSectors.map((sector) => createElement("label", { className: "checkbox sector-option", dataset: { search: `${sector.label} ${sector.google_maps_queries.join(" ")}`.toLowerCase() } }, [
+        createElement("input", { type: "checkbox", name: "sector_keys", value: sector.key, checked: defaultCheckedKeys.includes(sector.key) }),
+        sector.label,
+      ])),
+    ]);
+    groupCheckbox.addEventListener("change", () => {
+      groupElement.querySelectorAll('input[name="sector_keys"]').forEach((checkbox) => { checkbox.checked = groupCheckbox.checked; });
+      refreshGroupState(groupElement);
+    });
+    groupElement.addEventListener("change", (changeEvent) => {
+      if (changeEvent.target.name === "sector_keys") refreshGroupState(groupElement);
+    });
+    refreshGroupState(groupElement);
+    return groupElement;
+  });
+  filterInput.addEventListener("input", () => {
+    const filterText = filterInput.value.trim().toLowerCase();
+    groupElements.forEach((groupElement) => {
+      const options = [...groupElement.querySelectorAll(".sector-option")];
+      options.forEach((option) => { option.hidden = Boolean(filterText) && !option.dataset.search.includes(filterText); });
+      groupElement.hidden = options.every((option) => option.hidden);
+      groupElement.open = filterText ? true : Boolean(groupElement.querySelector('input[name="sector_keys"]:checked'));
+    });
+  });
+  container.replaceChildren(filterInput, ...groupElements);
 }
 
 function updateMap(pickerKey) {

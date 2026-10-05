@@ -342,6 +342,18 @@ FINDING_DEFINITIONS: tuple[FindingDefinition, ...] = (
         "Créer une section références, certifications et moyens de production.",
     ),
     FindingDefinition(
+        "missing_portfolio", "sector", "major", "Aucune réalisation présentée",
+        "Avant de demander un devis, un client veut voir le travail déjà réalisé : sans photos de chantiers ou de projets, il choisit un concurrent qui les montre.",
+        "Créer une galerie de réalisations (avant / après, par type de prestation) facile à alimenter.",
+        "Sur votre site, on ne voit aucune de vos réalisations : c'est pourtant ce qui décide un client à vous appeler plutôt qu'un concurrent.",
+    ),
+    FindingDefinition(
+        "missing_case_studies", "sector", "major", "Pas de références ni d'études de cas",
+        "Un décideur B2B cherche des preuves : clients similaires, résultats chiffrés. Sans références visibles, l'expertise reste une promesse.",
+        "Publier des études de cas avec le contexte, la solution et les résultats chiffrés.",
+        "Je n'ai trouvé aucune référence client sur votre site, alors que c'est le premier élément qu'un décideur regarde.",
+    ),
+    FindingDefinition(
         "missing_opening_hours", "sector", "minor", "Horaires introuvables",
         "Les horaires sont l'une des informations les plus recherchées : si elles manquent, le client n'ose pas se déplacer.",
         "Afficher les horaires sur la page d'accueil et les synchroniser avec Google.",

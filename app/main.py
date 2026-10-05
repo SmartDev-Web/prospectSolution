@@ -22,6 +22,7 @@ from app.models import (
     ActivityCreate,
     GoogleMapsEnrichmentRequest,
     GoogleMapsSearchRequest,
+    MergeRequest,
     OpenDataSearchRequest,
     ProspectCandidate,
     ProspectCreate,
@@ -109,11 +110,12 @@ def read_prospect_filters(
     search_text: str | None = None,
     source: str | None = None,
     sort: str | None = None,
+    sort_direction: str | None = None,
 ) -> dict[str, str | None]:
     """Collect the prospect list filters shared by the list and export endpoints."""
     return {
         "status": status, "sector_key": sector_key, "opportunity_level": opportunity_level, "website": website,
-        "search_text": search_text, "source": source, "sort": sort,
+        "search_text": search_text, "source": source, "sort": sort, "sort_direction": sort_direction,
     }
 
 
@@ -148,6 +150,19 @@ async def create_prospect(prospect_create: ProspectCreate) -> dict:
     if prospect_create.scan_now:
         start_scan_job([prospect_identifier], f"Analyse de {prospect_create.name}")
     return require_prospect(prospect_identifier)
+
+
+@application.post("/api/prospects/merge")
+async def merge_selected_prospects(merge_request: MergeRequest) -> dict:
+    merged_prospect = prospect_repository.merge_prospects(merge_request.prospect_ids)
+    if merged_prospect is None:
+        raise HTTPException(status_code=404, detail="Prospects introuvables")
+    return require_prospect(merged_prospect["id"])
+
+
+@application.post("/api/prospects/merge-duplicates")
+async def merge_duplicate_prospects() -> dict:
+    return {"merged": prospect_repository.merge_all_duplicates()}
 
 
 @application.post("/api/prospects/remove-chains")

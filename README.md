@@ -40,6 +40,10 @@ Commencez par l'onglet **⚙️ Réglages** : renseignez votre prénom, votre vi
 
 **Astuce qui rapporte :** dans Open Data, le filtre **« Entreprises créées après le »** cible les entreprises récentes. Elles n'ont souvent ni site ni fiche Google, et c'est le moment où elles achètent.
 
+**69 secteurs ciblables**, regroupés en familles : métiers de bouche, industrie, commerces locaux, tech et communication (agences de communication, agences web, éditeurs de logiciels, ESN, startups, graphistes, événementiel, imprimeries), bâtiment et artisans, santé et bien-être, professions libérales et conseil, automobile, tourisme et loisirs, services. Chaque famille a ses propres questions de découverte, recommandations et attentes métier (galerie de réalisations pour un artisan, études de cas pour une agence, prise de rendez-vous pour un cabinet médical…). Dans les formulaires de recherche, un champ filtre la liste et une case coche toute une famille.
+
+**Doublons fusionnés automatiquement** après chaque recherche (désactivable dans les réglages). Deux fiches sont considérées identiques si elles partagent le SIREN (plusieurs établissements d'une même entreprise deviennent une seule fiche), l'identifiant Google Maps, le site web, le téléphone avec un nom proche, ou un nom très proche à la même adresse. La fusion garde la fiche la plus ancienne et y rapatrie coordonnées, sources, notes, statut, appels et analyses. Le bouton **🔗 Fusionner les doublons** relance la détection, et cocher plusieurs lignes fait apparaître **🔗 Fusionner la sélection** pour regrouper des fiches à la main.
+
 **Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 250 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le bouton **🧹 Retirer les chaînes** nettoie une base existante.
 
 #### Comment l'outil trouve les sites web
@@ -72,7 +76,12 @@ L'analyse va plus loin qu'une simple page d'accueil :
 
 **Notation :** le score est la somme de 7 catégories pondérées (sécurité 15, mobile 20, vitesse 15, design 20, conversion 20, référencement 7, légal 3). Chaque catégorie a un plancher : dix détails de référencement ne peuvent pas couler un site moderne. Un problème critique (pas de HTTPS, site non mobile, design très daté…) plafonne le score à 40. Une catégorie non mesurable (page impossible à afficher) est exclue du calcul au lieu de compter comme parfaite. Moins de 50 : 🔥 chaud, moins de 70 : tiède, au-delà : froid.
 
+### La liste des prospects
+Cliquez sur un en-tête de colonne (score, entreprise, ville, effectif, téléphone, site, opportunité, statut, relance) pour trier, et cliquez à nouveau pour inverser l'ordre. L'effectif provient du registre officiel.
+
 ### La fiche prospect
+Dans **⚙️ Réglages → Fiche client**, cochez ce qui doit s'afficher : effectif recensé, coordonnées (téléphone, adresse, e-mail, site web), synthèse, diagnostic, script d'appel, e-mail, technique, historique.
+
 - **Barre d'actions** : appeler, copier le numéro, rechercher sur Google, Google Maps, ouvrir le site, fiche officielle, compléter via Google Maps.
 - **Origine** : « Fiche créée depuis OpenStreetMap / Google Maps / registre INSEE », et les sources qui l'ont complétée.
 - **Site** : niveau de confiance, preuves, correction manuelle, rejet, relance de la recherche.

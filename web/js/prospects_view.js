@@ -5,7 +5,7 @@ import { OPPORTUNITY_LABELS, SOURCE_LABELS, STATUS_LABELS } from "./labels.js";
 import { renderScoreBadge } from "./components.js";
 import { liveEvents } from "./live.js";
 import { openProspectDetail } from "./prospect_detail.js";
-import { createCoalescedRefresher, referenceData } from "./store.js";
+import { createCoalescedRefresher, isSectionVisible, referenceData, settingsEvents } from "./store.js";
 
 const FILTER_FIELDS = {
   search_text: "filter-search",
@@ -14,13 +14,83 @@ const FILTER_FIELDS = {
   status: "filter-status",
   website: "filter-website",
   source: "filter-source",
-  sort: "filter-sort",
 };
+// Each sortable column names the server sort key; clicking a header twice reverses the order
+const TABLE_COLUMNS = [
+  { key: "selection" },
+  { key: "score", label: "Score", sort: "score" },
+  { key: "name", label: "Entreprise", sort: "name" },
+  { key: "city", label: "Ville", sort: "city" },
+  { key: "employees", label: "Effectif", sort: "employees", setting: "sheet_show_employees" },
+  { key: "phone", label: "Téléphone", sort: "phone" },
+  { key: "website", label: "Site web", sort: "website" },
+  { key: "opportunity", label: "Opportunité", sort: "opportunity" },
+  { key: "status", label: "Statut", sort: "status" },
+  { key: "follow_up", label: "Relance", sort: "follow_up" },
+  { key: "actions" },
+];
+const NATURAL_SORT_DIRECTIONS = { employees: "desc", recent: "desc" };
+const sortState = { key: "opportunity", direction: "asc" };
+const selectedProspectIdentifiers = new Set();
+let displayedProspects = [];
 let viewIsVisible = true;
 let listIsStale = false;
 
+function visibleColumns() {
+  return TABLE_COLUMNS.filter((column) => !column.setting || isSectionVisible(column.setting));
+}
+
 function readFilters() {
-  return Object.fromEntries(Object.entries(FILTER_FIELDS).map(([filterName, elementIdentifier]) => [filterName, document.getElementById(elementIdentifier).value]));
+  const filters = Object.fromEntries(Object.entries(FILTER_FIELDS).map(([filterName, elementIdentifier]) => [filterName, document.getElementById(elementIdentifier).value]));
+  return { ...filters, sort: sortState.key, sort_direction: sortState.direction };
+}
+
+function changeSort(sortKey) {
+  if (sortState.key === sortKey) sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+  else Object.assign(sortState, { key: sortKey, direction: NATURAL_SORT_DIRECTIONS[sortKey] || "asc" });
+  requestProspectRefresh();
+}
+
+function refreshSelectionControls() {
+  const mergeButton = document.getElementById("merge-selection");
+  mergeButton.hidden = selectedProspectIdentifiers.size < 2;
+  mergeButton.textContent = `🔗 Fusionner la sélection (${selectedProspectIdentifiers.size})`;
+  const headerCheckbox = document.getElementById("select-all-prospects");
+  if (headerCheckbox) {
+    const selectedDisplayedCount = displayedProspects.filter((prospect) => selectedProspectIdentifiers.has(prospect.id)).length;
+    headerCheckbox.checked = displayedProspects.length > 0 && selectedDisplayedCount === displayedProspects.length;
+    headerCheckbox.indeterminate = selectedDisplayedCount > 0 && selectedDisplayedCount < displayedProspects.length;
+  }
+}
+
+function renderTableHeader() {
+  const headerCells = visibleColumns().map((column) => {
+    if (column.key === "selection") {
+      const selectAllCheckbox = createElement("input", {
+        type: "checkbox",
+        id: "select-all-prospects",
+        title: "Tout sélectionner",
+        onChange: (changeEvent) => {
+          displayedProspects.forEach((prospect) => {
+            if (changeEvent.target.checked) selectedProspectIdentifiers.add(prospect.id);
+            else selectedProspectIdentifiers.delete(prospect.id);
+          });
+          document.querySelectorAll(".row-checkbox").forEach((checkbox) => { checkbox.checked = changeEvent.target.checked; });
+          refreshSelectionControls();
+        },
+      });
+      return createElement("th", { className: "selection-cell" }, selectAllCheckbox);
+    }
+    if (!column.sort) return createElement("th", {});
+    const isActive = sortState.key === column.sort;
+    return createElement("th", {
+      className: `sortable ${isActive ? "active" : ""}`,
+      title: "Cliquer pour trier",
+      "aria-sort": isActive ? (sortState.direction === "asc" ? "ascending" : "descending") : "none",
+      onClick: () => changeSort(column.sort),
+    }, [column.label, createElement("span", { className: "sort-arrow", text: isActive ? (sortState.direction === "asc" ? " ▲" : " ▼") : " ↕" })]);
+  });
+  document.getElementById("prospect-table-head").replaceChildren(createElement("tr", {}, headerCells));
 }
 
 function renderProspectRow(prospect) {
@@ -43,21 +113,35 @@ function renderProspectRow(prospect) {
       await requestJson("/api/scans", { method: "POST", body: { prospect_ids: [prospect.id] } });
     },
   });
-  return createElement("tr", { onClick: () => openProspectDetail(prospect.id) }, [
-    createElement("td", {}, renderScoreBadge(prospect)),
-    createElement("td", {}, [
+  const selectionCheckbox = createElement("input", {
+    type: "checkbox",
+    className: "row-checkbox",
+    checked: selectedProspectIdentifiers.has(prospect.id),
+    onClick: (clickEvent) => clickEvent.stopPropagation(),
+    onChange: (changeEvent) => {
+      if (changeEvent.target.checked) selectedProspectIdentifiers.add(prospect.id);
+      else selectedProspectIdentifiers.delete(prospect.id);
+      refreshSelectionControls();
+    },
+  });
+  const cellsByColumn = {
+    selection: createElement("td", { className: "selection-cell", onClick: (clickEvent) => clickEvent.stopPropagation() }, selectionCheckbox),
+    score: createElement("td", {}, renderScoreBadge(prospect)),
+    name: createElement("td", {}, [
       createElement("div", { className: "prospect-name", text: prospect.name }),
       createElement("div", { className: "prospect-category", text: prospect.category_label || "" }),
       createElement("div", { className: "source-hint", text: `via ${(prospect.sources || []).map((source) => SOURCE_LABELS[source] || source).join(" + ")}` }),
     ]),
-    createElement("td", { text: prospect.city || "" }),
-    createElement("td", {}, phoneCell),
-    createElement("td", {}, websiteCell),
-    createElement("td", {}, prospect.opportunity_level ? createElement("span", { className: `tag ${prospect.opportunity_level}`, text: OPPORTUNITY_LABELS[prospect.opportunity_level] }) : createElement("span", { className: "muted", text: "Non analysé" })),
-    createElement("td", {}, createElement("span", { className: "tag", text: STATUS_LABELS[prospect.status] || prospect.status })),
-    createElement("td", { text: formatDate(prospect.next_follow_up) }),
-    createElement("td", {}, scanButton),
-  ]);
+    city: createElement("td", { text: prospect.city || "" }),
+    employees: createElement("td", { className: "employees-cell", text: prospect.employee_range || "—" }),
+    phone: createElement("td", {}, phoneCell),
+    website: createElement("td", {}, websiteCell),
+    opportunity: createElement("td", {}, prospect.opportunity_level ? createElement("span", { className: `tag ${prospect.opportunity_level}`, text: OPPORTUNITY_LABELS[prospect.opportunity_level] }) : createElement("span", { className: "muted", text: "Non analysé" })),
+    status: createElement("td", {}, createElement("span", { className: "tag", text: STATUS_LABELS[prospect.status] || prospect.status })),
+    follow_up: createElement("td", { text: formatDate(prospect.next_follow_up) }),
+    actions: createElement("td", {}, scanButton),
+  };
+  return createElement("tr", { onClick: () => openProspectDetail(prospect.id) }, visibleColumns().map((column) => cellsByColumn[column.key]));
 }
 
 function renderStatistics(statistics) {
@@ -73,9 +157,7 @@ function renderStatistics(statistics) {
   document.getElementById("statistics").replaceChildren(...statisticCards.map((statisticCard) => createElement("div", {
     className: "stat-card",
     onClick: () => {
-      Object.values(FILTER_FIELDS).forEach((elementIdentifier) => {
-        if (elementIdentifier !== "filter-sort") document.getElementById(elementIdentifier).value = "";
-      });
+      Object.values(FILTER_FIELDS).forEach((elementIdentifier) => { document.getElementById(elementIdentifier).value = ""; });
       Object.entries(statisticCard.filter).forEach(([elementIdentifier, filterValue]) => { document.getElementById(elementIdentifier).value = filterValue; });
       requestProspectRefresh();
     },
@@ -91,7 +173,12 @@ async function refreshProspects() {
     requestJson("/api/statistics"),
   ]);
   renderStatistics(statistics);
+  displayedProspects = prospects;
+  const existingIdentifiers = new Set(prospects.map((prospect) => prospect.id));
+  [...selectedProspectIdentifiers].forEach((identifier) => { if (!existingIdentifiers.has(identifier)) selectedProspectIdentifiers.delete(identifier); });
+  renderTableHeader();
   document.getElementById("prospect-rows").replaceChildren(...prospects.map(renderProspectRow));
+  refreshSelectionControls();
   document.getElementById("prospects-empty").hidden = statistics.total > 0;
   document.getElementById("prospect-count").textContent = `${prospects.length} prospect${prospects.length > 1 ? "s" : ""} affiché${prospects.length > 1 ? "s" : ""}`;
   listIsStale = false;
@@ -105,8 +192,10 @@ function handleProspectChange() {
 }
 
 function populateFilterOptions() {
+  const sectorGroups = [...new Set(referenceData.sectors.map((sector) => sector.group))];
   const sectorSelects = [document.getElementById("filter-sector"), document.getElementById("add-prospect-form").elements.sector_key];
-  sectorSelects.forEach((sectorSelect) => referenceData.sectors.forEach((sector) => sectorSelect.append(createElement("option", { value: sector.key, text: sector.label }))));
+  sectorSelects.forEach((sectorSelect) => sectorGroups.forEach((groupLabel) => sectorSelect.append(createElement("optgroup", { label: groupLabel },
+    referenceData.sectors.filter((sector) => sector.group === groupLabel).map((sector) => createElement("option", { value: sector.key, text: sector.label }))))));
   document.getElementById("filter-opportunity").replaceChildren(
     createElement("option", { value: "", text: "Toutes les opportunités" }),
     ...Object.entries(OPPORTUNITY_LABELS).map(([levelKey, levelLabel]) => createElement("option", { value: levelKey, text: levelLabel })),
@@ -162,6 +251,23 @@ export function initializeProspectsView() {
       showToast(error.message, "error");
     }
   });
+  document.getElementById("merge-duplicates").addEventListener("click", async () => {
+    const mergeResult = await requestJson("/api/prospects/merge-duplicates", { method: "POST" });
+    showToast(mergeResult.merged ? `${mergeResult.merged} doublon(s) fusionné(s).` : "Aucun doublon trouvé.");
+  });
+  document.getElementById("merge-selection").addEventListener("click", async () => {
+    const selectedNames = displayedProspects.filter((prospect) => selectedProspectIdentifiers.has(prospect.id)).map((prospect) => prospect.name);
+    if (!window.confirm(`Fusionner ces ${selectedProspectIdentifiers.size} prospects en une seule fiche ?\n\n${selectedNames.join("\n")}\n\nLa fiche la plus ancienne est conservée et complétée par les autres (coordonnées, notes, appels, analyses).`)) return;
+    try {
+      const mergedProspect = await requestJson("/api/prospects/merge", { method: "POST", body: { prospect_ids: [...selectedProspectIdentifiers] } });
+      selectedProspectIdentifiers.clear();
+      showToast(`Prospects fusionnés dans « ${mergedProspect.name} ».`);
+      openProspectDetail(mergedProspect.id);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+  settingsEvents.addEventListener("changed", requestProspectRefresh);
   document.getElementById("remove-chains").addEventListener("click", async () => {
     if (!window.confirm("Supprimer tous les prospects reconnus comme chaînes ou franchises (McDonald's, Subway, Leclerc…) ?")) return;
     const removal = await requestJson("/api/prospects/remove-chains", { method: "POST" });

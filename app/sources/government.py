@@ -15,10 +15,15 @@ RESULTS_PER_PAGE = 25
 # The registry allows 7 requests per second; staying well below avoids any refusal
 registry_pacer = RequestPacer(0.4)
 LARGE_COMPANY_CATEGORIES = {"GE", "ETI"}
+EMPLOYEE_RANGE_MINIMUMS = {
+    "NN": 0, "00": 0, "01": 1, "02": 3, "03": 6, "11": 10, "12": 20, "21": 50, "22": 100, "31": 200, "32": 250,
+    "41": 500, "42": 1000, "51": 2000, "52": 5000, "53": 10000,
+}
 EMPLOYEE_RANGE_LABELS = {
     "NN": "Non employeur", "00": "0 salarié", "01": "1-2 salariés", "02": "3-5 salariés", "03": "6-9 salariés",
     "11": "10-19 salariés", "12": "20-49 salariés", "21": "50-99 salariés", "22": "100-199 salariés",
     "31": "200-249 salariés", "32": "250-499 salariés", "41": "500-999 salariés", "42": "1000-1999 salariés",
+    "51": "2000-4999 salariés", "52": "5000-9999 salariés", "53": "10000 salariés et plus",
 }
 
 
@@ -81,6 +86,7 @@ def parse_establishment(company: dict, establishment: dict) -> ProspectCandidate
         longitude=float(longitude) if longitude else None,
         creation_date=establishment.get("date_creation"),
         employee_range=EMPLOYEE_RANGE_LABELS.get(establishment.get("tranche_effectif_salarie") or "", None),
+        employee_minimum=EMPLOYEE_RANGE_MINIMUMS.get(establishment.get("tranche_effectif_salarie") or ""),
         manager_name=find_manager_name(company),
         establishment_count=company.get("nombre_etablissements_ouverts"),
     )

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS prospects (
     establishment_count INTEGER,
     creation_date TEXT,
     employee_range TEXT,
+    employee_minimum INTEGER,
     google_rating REAL,
     google_review_count INTEGER,
     google_maps_url TEXT,
@@ -100,6 +101,7 @@ ADDED_PROSPECT_COLUMNS = {
     "brand": "TEXT",
     "establishment_count": "INTEGER",
     "google_maps_checked": "INTEGER NOT NULL DEFAULT 0",
+    "employee_minimum": "INTEGER",
 }
 
 
@@ -136,6 +138,11 @@ class Database:
         for column_name, column_type in ADDED_PROSPECT_COLUMNS.items():
             if column_name not in existing_columns:
                 self._connection.execute(f"ALTER TABLE prospects ADD COLUMN {column_name} {column_type}")
+        if "employee_minimum" not in existing_columns:
+            # Existing prospects only stored the label, whose leading number is the lower bound of the range
+            self._connection.execute(
+                "UPDATE prospects SET employee_minimum = CASE WHEN employee_range = 'Non employeur' THEN 0 ELSE CAST(employee_range AS INTEGER) END WHERE employee_range IS NOT NULL"
+            )
 
     def execute(self, sql: str, parameters: tuple | dict = ()) -> sqlite3.Cursor:
         """Run a statement and return its cursor."""

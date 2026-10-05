@@ -39,17 +39,12 @@
           <option value="openstreetmap">OpenStreetMap</option>
           <option value="google_maps">Google Maps</option>
         </select>
-        <select id="filter-sort">
-          <option value="opportunity">Tri : opportunité</option>
-          <option value="score">Tri : score croissant</option>
-          <option value="recent">Tri : plus récents</option>
-          <option value="name">Tri : nom</option>
-          <option value="follow_up">Tri : date de relance</option>
-        </select>
       </div>
       <div class="toolbar actions">
         <span class="muted" id="prospect-count"></span>
         <span class="spacer"></span>
+        <button class="button primary" id="merge-selection" hidden>🔗 Fusionner la sélection</button>
+        <button class="button secondary" id="merge-duplicates" title="Regroupe les fiches qui décrivent la même entreprise (même SIRET, même site, même téléphone ou même nom à la même adresse)">🔗 Fusionner les doublons</button>
         <button class="button secondary" id="add-prospect-toggle">➕ Ajouter un prospect</button>
         <button class="button secondary" id="discover-missing-websites" title="Relance la recherche de site pour tous les prospects sans site">🤖 Chercher les sites manquants</button>
         <button class="button secondary" id="enrich-phones" title="Cherche sur Google Maps les prospects sans téléphone (30 au maximum par passage)">📞 Compléter les téléphones</button>
@@ -69,9 +64,7 @@
       </form>
       <div class="table-wrapper">
         <table class="prospect-table">
-          <thead>
-            <tr><th>Score</th><th>Entreprise</th><th>Ville</th><th>Téléphone</th><th>Site web</th><th>Opportunité</th><th>Statut</th><th>Relance</th><th></th></tr>
-          </thead>
+          <thead id="prospect-table-head"></thead>
           <tbody id="prospect-rows"></tbody>
         </table>
         <div class="empty-state" id="prospects-empty" hidden>
@@ -162,6 +155,21 @@
           <label>Téléphone<input name="freelancer_phone"></label>
           <label>E-mail<input name="freelancer_email" type="email"></label>
           <label>Site web<input name="freelancer_website"></label>
+        </div>
+        <h2>Fiche client <span class="muted">(ce qui s'affiche dans la fiche d'un prospect)</span></h2>
+        <div class="field-grid">
+          <label class="checkbox"><input type="checkbox" name="sheet_show_employees"> Nombre d'employés recensé</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_contacts"> Coordonnées (téléphone, adresse, e-mail, site web)</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_synthesis"> Synthèse</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_diagnosis"> Diagnostic</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_script"> Script d'appel</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_email"> E-mail de suite</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_technical"> Technique</label>
+          <label class="checkbox"><input type="checkbox" name="sheet_show_history"> Historique des appels</label>
+        </div>
+        <h2>Doublons</h2>
+        <div class="field-grid">
+          <label class="checkbox"><input type="checkbox" name="auto_merge_duplicates"> Fusionner automatiquement les fiches identiques après chaque recherche</label>
         </div>
         <h2>Analyse des sites</h2>
         <div class="field-grid">
