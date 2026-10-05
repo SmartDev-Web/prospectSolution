@@ -3,6 +3,7 @@ import asyncio
 import logging
 import random
 import re
+from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -13,6 +14,7 @@ from app.config import GOOGLE_MAPS_PROFILE_DIRECTORY
 from app.geo import is_within_radius
 from app.models import ProspectCandidate, SearchArea
 from app.sectors import Sector
+from app.text_utils import company_name_similarity
 
 logger = logging.getLogger(__name__)
 # Google changes its markup regularly: every selector lives here so that a fix is a one-line change
@@ -59,6 +61,17 @@ POSTAL_CODE_CITY_PATTERN = re.compile(r"(\d{5})\s+([^,]+?)\s*$")
 CAPTCHA_RESOLUTION_TIMEOUT_MS = 5 * 60 * 1000
 SCROLL_GROWTH_TIMEOUT_MS = 8000
 RESULT_CLICK_TIMEOUT_MS = 6000
+LOOKUP_RESULTS_CHECKED = 3
+LOOKUP_NAME_SIMILARITY = 0.6
+
+
+@dataclass
+class PlaceLookup:
+    """A targeted search for one known business on Google Maps."""
+    reference: int
+    query: str
+    names: list[str]
+    area: SearchArea
 
 
 class GoogleMapsBlockedError(RuntimeError):
@@ -124,6 +137,7 @@ def parse_place(raw_place: dict, place_url: str, sector: Sector | None) -> Prosp
         phone=phone_item.removeprefix("phone:tel:") or None,
         website_url=website_url,
         website_origin="google_maps" if website_url else None,
+        website_confidence="high" if website_url else None,
         google_rating=float(rating_text) if re.fullmatch(r"\d(\.\d)?", rating_text) else None,
         google_review_count=parse_review_count(raw_place.get("reviewText")),
         google_maps_url=place_url.split("?")[0],
@@ -237,5 +251,34 @@ class GoogleMapsScraper:
                     if candidate and is_within_radius(area.latitude, area.longitude, area.radius_km, candidate.latitude, candidate.longitude):
                         yield candidate
                 await pause_like_a_human(self._pause_range_seconds[0] * 2, self._pause_range_seconds[1] * 2)
+        finally:
+            await browser_context.close()
+
+    async def lookup(self, lookups: list[PlaceLookup]) -> AsyncIterator[tuple[PlaceLookup, ProspectCandidate | None]]:
+        """Find each known business on Google Maps and yield its listing when the name matches."""
+        browser_context = await browser_runtime.launch_persistent_context(str(GOOGLE_MAPS_PROFILE_DIRECTORY), self._headless)
+        try:
+            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+            for lookup in lookups:
+                matching_candidate = None
+                try:
+                    place_urls = await self._collect_place_urls(page, build_search_url(lookup.query, lookup.area), LOOKUP_RESULTS_CHECKED)
+                except PlaywrightTimeoutError:
+                    place_urls = []
+                for place_url in place_urls:
+                    await pause_like_a_human(*self._pause_range_seconds)
+                    try:
+                        candidate = await self._extract_place(page, place_url, None)
+                    except GoogleMapsBlockedError:
+                        raise
+                    except PlaywrightError:
+                        continue
+                    if candidate is None or not is_within_radius(lookup.area.latitude, lookup.area.longitude, lookup.area.radius_km, candidate.latitude, candidate.longitude):
+                        continue
+                    if max(company_name_similarity(candidate.name, name) for name in lookup.names) >= LOOKUP_NAME_SIMILARITY:
+                        matching_candidate = candidate
+                        break
+                yield lookup, matching_candidate
+                await pause_like_a_human(*self._pause_range_seconds)
         finally:
             await browser_context.close()

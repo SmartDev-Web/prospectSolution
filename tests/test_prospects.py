@@ -59,3 +59,24 @@ def test_csv_export_contains_prospects():
     csv_content = prospect_repository.export_csv({})
     assert "BOUCHERIE BRUME" in csv_content
     assert csv_content.splitlines()[0].lstrip("﻿").startswith("id;name;")
+
+
+def test_google_maps_listing_completes_a_registry_prospect():
+    prospect_identifier, _ = prospect_repository.upsert_prospect(build_registry_candidate())
+    prospect_repository.record_website_check(prospect_identifier, "https://www.littoral.com/", "domain_guess", "medium", ["nom dans le nom de domaine"])
+    prospect_repository.enrich_from_listing(prospect_identifier, ProspectCandidate(
+        name="Boucherie Brume", source="google_maps", phone="0467000000", website_url="https://boucherie-brume.fr/", google_rating=4.8, google_review_count=120,
+    ))
+    enriched_prospect = prospect_repository.get_prospect(prospect_identifier)
+    assert enriched_prospect["phone"] == "04 67 00 00 00"
+    assert enriched_prospect["website_url"] == "https://boucherie-brume.fr/"
+    assert enriched_prospect["website_confidence"] == "high"
+    assert enriched_prospect["google_review_count"] == 120
+    assert "google_maps" in enriched_prospect["sources"]
+    assert prospect_repository.list_ids_without_phone(10) == []
+
+
+def test_chain_cleanup_removes_franchises_only():
+    prospect_repository.upsert_prospect(build_registry_candidate())
+    prospect_repository.upsert_prospect(build_registry_candidate(name="SUBWAY SUBAUNES", legal_name="SUBAUNES", siret="11122233300011", latitude=43.70))
+    assert prospect_repository.remove_chains() == ["SUBWAY SUBAUNES"]

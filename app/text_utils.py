@@ -60,6 +60,14 @@ def format_place_name(place_name: str | None) -> str | None:
     return "".join(formatted_words)
 
 
+def extract_street_name(address: str | None) -> str | None:
+    """Return the street part of a French address, for example 'rue du faubourg du courreau'."""
+    if not address:
+        return None
+    street_match = re.match(r"^\s*\d+\s*(?:bis|ter|[a-c])?\s*,?\s*(.+?)(?:,|\s+\d{5}\b)", address, re.IGNORECASE)
+    return street_match.group(1).strip().lower() if street_match else None
+
+
 def slugify(text: str, separator: str = "-") -> str:
     """Convert free text to a lowercase ASCII slug."""
     plain_text = strip_accents(text or "").lower()

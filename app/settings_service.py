@@ -15,7 +15,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "freelancer_website": "",
     "scan_concurrency": 3,
     "lighthouse_enabled": False,
-    "website_discovery_use_search_engine": True,
+    "search_engine_duckduckgo": True,
+    "search_engine_bing": True,
+    "search_engine_google_browser": False,
+    "google_search_headless": False,
+    "crawl_internal_pages": 4,
     "google_maps_headless": False,
     "google_maps_pause_min_seconds": 2.0,
     "google_maps_pause_max_seconds": 5.0,
@@ -24,6 +28,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "llm_managed_port": 11435,
     "llm_gpu_uuid": "",
     "llm_model": "qwen2.5:7b-instruct",
+    "llm_vision_model": "",
     "ollama_executable": "ollama",
 }
 

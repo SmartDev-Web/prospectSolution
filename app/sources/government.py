@@ -1,9 +1,10 @@
 """Business search through the French government company registry (Sirene / RNE)."""
 import logging
+import re
 from typing import AsyncIterator
 
 from app.geo import is_within_radius
-from app.http_client import create_open_data_client, request_json_with_retries
+from app.http_client import RequestPacer, create_open_data_client, request_json_with_retries
 from app.models import ProspectCandidate, SearchArea
 from app.sectors import Sector, find_sector_by_naf_code, naf_code_in_sections
 from app.text_utils import format_place_name
@@ -11,6 +12,8 @@ from app.text_utils import format_place_name
 logger = logging.getLogger(__name__)
 NEAR_POINT_URL = "https://recherche-entreprises.api.gouv.fr/near_point"
 RESULTS_PER_PAGE = 25
+# The registry allows 7 requests per second; staying well below avoids any refusal
+registry_pacer = RequestPacer(0.4)
 LARGE_COMPANY_CATEGORIES = {"GE", "ETI"}
 EMPLOYEE_RANGE_LABELS = {
     "NN": "Non employeur", "00": "0 salarié", "01": "1-2 salariés", "02": "3-5 salariés", "03": "6-9 salariés",
@@ -27,6 +30,26 @@ def build_establishment_name(company: dict, establishment: dict) -> tuple[str, l
     ordered_names = [name for name in (*signboard_names, trade_name, company.get("nom_complet"), legal_name) if name]
     unique_names = list(dict.fromkeys(name.strip() for name in ordered_names))
     return unique_names[0], unique_names[1:]
+
+
+def format_person_name(first_names: str | None, last_name: str | None) -> str | None:
+    """Format a registry person as 'Jean Dupont', keeping only the first given name."""
+    if not last_name:
+        return None
+    first_name = (first_names or "").split(" ")[0]
+    # Registry names carry the birth or usage name in parentheses, irrelevant on the phone
+    cleaned_last_name = re.sub(r"\s*\(.*?\)", "", last_name).strip()
+    return " ".join(part for part in (format_place_name(first_name), format_place_name(cleaned_last_name)) if part)
+
+
+def find_manager_name(company: dict) -> str | None:
+    """Return the name of the person running the company, to ask for them on the phone."""
+    for manager in company.get("dirigeants") or []:
+        if manager.get("type_dirigeant") == "personne physique" and manager.get("nom"):
+            return format_person_name(manager.get("prenoms"), manager.get("nom"))
+    if (company.get("complements") or {}).get("est_entrepreneur_individuel"):
+        return format_place_name(re.sub(r"\s*\(.*?\)", "", company.get("nom_complet") or "").strip()) or None
+    return None
 
 
 def parse_establishment(company: dict, establishment: dict) -> ProspectCandidate | None:
@@ -58,6 +81,8 @@ def parse_establishment(company: dict, establishment: dict) -> ProspectCandidate
         longitude=float(longitude) if longitude else None,
         creation_date=establishment.get("date_creation"),
         employee_range=EMPLOYEE_RANGE_LABELS.get(establishment.get("tranche_effectif_salarie") or "", None),
+        manager_name=find_manager_name(company),
+        establishment_count=company.get("nombre_etablissements_ouverts"),
     )
 
 
@@ -106,7 +131,7 @@ async def search_government_registry(
                     "page": page_number,
                     **activity_filter,
                 }
-                response_body = await request_json_with_retries(client, "GET", NEAR_POINT_URL, params=query_parameters)
+                response_body = await request_json_with_retries(client, "GET", NEAR_POINT_URL, pacer=registry_pacer, params=query_parameters)
                 total_pages = response_body.get("total_pages") or 1
                 for company in response_body.get("results", []):
                     if exclude_large_companies and company.get("categorie_entreprise") in LARGE_COMPANY_CATEGORIES:

@@ -4,7 +4,7 @@ import { createElement, showToast } from "./dom.js";
 import { liveEvents } from "./live.js";
 
 const jobsByIdentifier = new Map();
-const FINISHED_JOB_DISPLAY_LIMIT = 4;
+const FINISHED_JOB_DISPLAY_LIMIT = 6;
 const JOB_STATUS_LABELS = { running: "En cours", completed: "Terminé", failed: "Échec", cancelled: "Annulé" };
 
 function renderJob(job) {
@@ -18,7 +18,9 @@ function renderJob(job) {
     createElement("div", { className: "job-header" }, [
       createElement("span", { className: "job-label", text: job.label }),
       createElement("span", { className: "tag", text: JOB_STATUS_LABELS[job.status] || job.status }),
-      isRunning ? createElement("button", { className: "button ghost small", text: "Annuler", onClick: () => requestJson(`/api/jobs/${job.id}/cancel`, { method: "POST" }) }) : null,
+      isRunning
+        ? createElement("button", { className: "button ghost small", text: "Annuler", onClick: () => requestJson(`/api/jobs/${job.id}/cancel`, { method: "POST" }) })
+        : createElement("button", { className: "job-dismiss", title: "Retirer de la liste", "aria-label": "Retirer de la liste", text: "✕", onClick: () => requestJson(`/api/jobs/${job.id}`, { method: "DELETE" }) }),
     ]),
     job.progress_total ? createElement("div", { className: "job-message", text: `${job.progress_current} / ${job.progress_total}` }) : null,
     createElement("div", { className: "progress" }, progressBar),
@@ -30,9 +32,11 @@ function renderJobs() {
   const sortedJobs = [...jobsByIdentifier.values()].sort((first, second) => second.id - first.id);
   const runningJobs = sortedJobs.filter((job) => job.status === "running");
   const finishedJobs = sortedJobs.filter((job) => job.status !== "running").slice(0, FINISHED_JOB_DISPLAY_LIMIT);
-  document.getElementById("jobs-list").replaceChildren(...[...runningJobs, ...finishedJobs].map(renderJob));
+  const clearButton = finishedJobs.length
+    ? createElement("button", { className: "button ghost small jobs-clear", text: "🧹 Effacer les tâches terminées", onClick: () => requestJson("/api/jobs/clear", { method: "POST" }) })
+    : null;
+  document.getElementById("jobs-list").replaceChildren(...[...runningJobs, ...finishedJobs].map(renderJob), ...(clearButton ? [clearButton] : []));
   document.getElementById("running-job-count").textContent = runningJobs.length;
-  document.getElementById("jobs-panel").classList.toggle("collapsed", runningJobs.length === 0);
 }
 
 function storeJob(job) {
@@ -50,10 +54,20 @@ export function initializeJobsView() {
   document.getElementById("jobs-toggle").addEventListener("click", () => jobsPanel.classList.toggle("collapsed"));
   liveEvents.addEventListener("jobs.snapshot", (snapshotEvent) => {
     snapshotEvent.detail.forEach(storeJob);
+    jobsPanel.classList.toggle("collapsed", !snapshotEvent.detail.some((job) => job.status === "running"));
     renderJobs();
   });
   liveEvents.addEventListener("job.updated", (jobEvent) => {
+    const isNewJob = !jobsByIdentifier.has(jobEvent.detail.id);
     storeJob(jobEvent.detail);
+    const hasRunningJob = [...jobsByIdentifier.values()].some((job) => job.status === "running");
+    // The panel opens when work starts and folds away once everything is finished
+    if (isNewJob && jobEvent.detail.status === "running") jobsPanel.classList.remove("collapsed");
+    if (!hasRunningJob && jobEvent.detail.status !== "running") jobsPanel.classList.add("collapsed");
+    renderJobs();
+  });
+  liveEvents.addEventListener("job.removed", (removalEvent) => {
+    jobsByIdentifier.delete(removalEvent.detail.id);
     renderJobs();
   });
 }

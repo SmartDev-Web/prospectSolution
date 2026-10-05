@@ -52,6 +52,7 @@ def parse_overpass_element(element: dict) -> ProspectCandidate | None:
     address = ", ".join(part for part in (street_line, " ".join(part for part in (postal_code, city) if part)) if part) or None
     website_url = first_tag_value(osm_tags, "website", "contact:website", "url")
     social_url = first_tag_value(osm_tags, "contact:facebook", "facebook", "contact:instagram")
+    brand = osm_tags.get("brand") or (name if osm_tags.get("brand:wikidata") else None)
     return ProspectCandidate(
         name=name,
         source="openstreetmap",
@@ -67,6 +68,8 @@ def parse_overpass_element(element: dict) -> ProspectCandidate | None:
         email=first_tag_value(osm_tags, "email", "contact:email"),
         website_url=website_url,
         website_origin="openstreetmap" if website_url else None,
+        website_confidence="high" if website_url else None,
+        brand=brand,
         social_url=social_url if social_url and social_url.startswith("http") else None,
     )
 

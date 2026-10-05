@@ -30,7 +30,13 @@ CREATE TABLE IF NOT EXISTS prospects (
     website_url TEXT,
     website_domain TEXT,
     website_origin TEXT,
+    website_confidence TEXT,
+    website_evidence TEXT,
+    rejected_domains TEXT NOT NULL DEFAULT '[]',
     social_url TEXT,
+    manager_name TEXT,
+    brand TEXT,
+    establishment_count INTEGER,
     creation_date TEXT,
     employee_range TEXT,
     google_rating REAL,
@@ -44,6 +50,7 @@ CREATE TABLE IF NOT EXISTS prospects (
     score INTEGER,
     opportunity_level TEXT,
     website_check_done INTEGER NOT NULL DEFAULT 0,
+    google_maps_checked INTEGER NOT NULL DEFAULT 0,
     last_scan_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -83,7 +90,17 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 """
-JSON_COLUMNS = {"sources", "metrics", "findings", "contacts", "report"}
+JSON_COLUMNS = {"sources", "metrics", "findings", "contacts", "report", "rejected_domains"}
+# Columns introduced after the first release, added in place to existing databases
+ADDED_PROSPECT_COLUMNS = {
+    "website_confidence": "TEXT",
+    "website_evidence": "TEXT",
+    "rejected_domains": "TEXT NOT NULL DEFAULT '[]'",
+    "manager_name": "TEXT",
+    "brand": "TEXT",
+    "establishment_count": "INTEGER",
+    "google_maps_checked": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 def utc_now_iso() -> str:
@@ -112,6 +129,13 @@ class Database:
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.executescript(SCHEMA)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        existing_columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(prospects)").fetchall()}
+        for column_name, column_type in ADDED_PROSPECT_COLUMNS.items():
+            if column_name not in existing_columns:
+                self._connection.execute(f"ALTER TABLE prospects ADD COLUMN {column_name} {column_type}")
 
     def execute(self, sql: str, parameters: tuple | dict = ()) -> sqlite3.Cursor:
         """Run a statement and return its cursor."""

@@ -142,6 +142,7 @@ function initializeOpenDataForm() {
       use_openstreetmap: form.elements.use_openstreetmap.checked,
       discover_websites: form.elements.discover_websites.checked,
       exclude_large_companies: form.elements.exclude_large_companies.checked,
+      exclude_chains: form.elements.exclude_chains.checked,
       auto_scan: form.elements.auto_scan.checked,
       max_results: Number(form.elements.max_results.value),
     }, form.querySelector('button[type="submit"]'));
@@ -159,6 +160,7 @@ function initializeGoogleMapsForm() {
       custom_queries: form.elements.custom_queries.value.split("\n").map((query) => query.trim()).filter(Boolean),
       max_results_per_query: Number(form.elements.max_results_per_query.value),
       headless: !form.elements.visible_browser.checked,
+      exclude_chains: form.elements.exclude_chains.checked,
       auto_scan: form.elements.auto_scan.checked,
     }, form.querySelector('button[type="submit"]'));
   });

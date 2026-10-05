@@ -7,6 +7,7 @@ DATA_DIRECTORY = Path(os.environ.get("PROSPECT_DATA_DIR", APPLICATION_ROOT / "da
 DATABASE_PATH = DATA_DIRECTORY / "prospects.sqlite3"
 SCREENSHOT_DIRECTORY = DATA_DIRECTORY / "screenshots"
 GOOGLE_MAPS_PROFILE_DIRECTORY = DATA_DIRECTORY / "google_maps_profile"
+GOOGLE_SEARCH_PROFILE_DIRECTORY = DATA_DIRECTORY / "google_search_profile"
 WEB_DIRECTORY = APPLICATION_ROOT / "web"
 SERVER_HOST = os.environ.get("PROSPECT_HOST", "127.0.0.1")
 SERVER_PORT = int(os.environ.get("PROSPECT_PORT", "8765"))
@@ -25,5 +26,5 @@ OPEN_DATA_USER_AGENT = "ProspectSolution/1.0 (local prospecting tool)"
 
 def ensure_data_directories() -> None:
     """Create every runtime directory used to persist data."""
-    for directory in (DATA_DIRECTORY, SCREENSHOT_DIRECTORY, GOOGLE_MAPS_PROFILE_DIRECTORY):
+    for directory in (DATA_DIRECTORY, SCREENSHOT_DIRECTORY, GOOGLE_MAPS_PROFILE_DIRECTORY, GOOGLE_SEARCH_PROFILE_DIRECTORY):
         directory.mkdir(parents=True, exist_ok=True)

@@ -51,6 +51,9 @@
         <span class="muted" id="prospect-count"></span>
         <span class="spacer"></span>
         <button class="button secondary" id="add-prospect-toggle">➕ Ajouter un prospect</button>
+        <button class="button secondary" id="discover-missing-websites" title="Relance la recherche de site pour tous les prospects sans site">🤖 Chercher les sites manquants</button>
+        <button class="button secondary" id="enrich-phones" title="Cherche sur Google Maps les prospects sans téléphone (30 au maximum par passage)">📞 Compléter les téléphones</button>
+        <button class="button secondary" id="remove-chains" title="Supprime les chaînes et franchises déjà importées">🧹 Retirer les chaînes</button>
         <button class="button secondary" id="scan-unscanned">⚡ Analyser les prospects non analysés</button>
         <button class="button secondary" id="export-csv">⬇️ Exporter en CSV</button>
       </div>
@@ -109,6 +112,7 @@
             <label class="checkbox"><input type="checkbox" name="use_openstreetmap" checked> OpenStreetMap</label>
             <label class="checkbox"><input type="checkbox" name="discover_websites" checked> Chercher les sites web manquants</label>
             <label class="checkbox"><input type="checkbox" name="exclude_large_companies" checked> Exclure les grandes entreprises</label>
+            <label class="checkbox"><input type="checkbox" name="exclude_chains" checked> Exclure les chaînes et franchises</label>
             <label class="checkbox"><input type="checkbox" name="auto_scan"> Analyser automatiquement ensuite</label>
           </div>
           <label>Nombre maximum d'établissements
@@ -139,6 +143,7 @@
           </label>
           <div class="option-grid">
             <label class="checkbox"><input type="checkbox" name="visible_browser" checked> Navigateur visible (recommandé)</label>
+            <label class="checkbox"><input type="checkbox" name="exclude_chains" checked> Exclure les chaînes et franchises</label>
             <label class="checkbox"><input type="checkbox" name="auto_scan"> Analyser automatiquement ensuite</label>
           </div>
           <button class="button primary" type="submit">🗺️ Lancer le scraping</button>
@@ -162,7 +167,15 @@
         <div class="field-grid">
           <label>Analyses en parallèle<input name="scan_concurrency" type="number" min="1" max="8"></label>
           <label class="checkbox"><input type="checkbox" name="lighthouse_enabled"> Audit Google Lighthouse <span class="muted" id="lighthouse-availability"></span></label>
-          <label class="checkbox"><input type="checkbox" name="website_discovery_use_search_engine"> Utiliser DuckDuckGo pour trouver les sites</label>
+          <label>Pages internes analysées par site<input name="crawl_internal_pages" type="number" min="0" max="8"></label>
+        </div>
+        <h2>Recherche des sites web</h2>
+        <p class="muted">Pour chaque entreprise sans site, l'outil devine d'abord le nom de domaine (.fr, .com, .eu, .net, .org, .info), puis interroge les moteurs cochés dans l'ordre. Chaque site candidat est vérifié : nom, adresse, téléphone, SIREN dans les mentions légales. Un moteur qui bloque est automatiquement mis de côté jusqu'à la fin de la tâche.</p>
+        <div class="field-grid">
+          <label class="checkbox"><input type="checkbox" name="search_engine_duckduckgo"> DuckDuckGo</label>
+          <label class="checkbox"><input type="checkbox" name="search_engine_bing"> Bing</label>
+          <label class="checkbox"><input type="checkbox" name="search_engine_google_browser"> Google (via navigateur, le plus pertinent mais CAPTCHA possible)</label>
+          <label class="checkbox"><input type="checkbox" name="google_search_headless"> Google en mode invisible</label>
         </div>
         <h2>Google Maps</h2>
         <div class="field-grid">
@@ -188,6 +201,15 @@
               <option value="mistral:7b-instruct">
               <option value="llama3.1:8b">
               <option value="gemma2:2b">
+            </datalist>
+          </label>
+          <label>Modèle de vision (analyse du design) <span class="muted">vide = désactivé</span>
+            <input name="llm_vision_model" list="vision-model-suggestions" placeholder="qwen2.5vl:3b">
+            <datalist id="vision-model-suggestions">
+              <option value="qwen2.5vl:3b">
+              <option value="qwen2.5vl:7b">
+              <option value="llava:7b">
+              <option value="minicpm-v">
             </datalist>
           </label>
           <label>Port du serveur géré<input name="llm_managed_port" type="number"></label>

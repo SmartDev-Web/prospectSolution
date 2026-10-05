@@ -14,6 +14,11 @@ NAVIGATION_TIMEOUT_MS = 45000
 LOAD_EVENT_TIMEOUT_MS = 20000
 NETWORK_IDLE_TIMEOUT_MS = 6000
 NAVIGATION_ATTEMPTS = 2
+STYLES_READY_TIMEOUT_MS = 20000
+STYLES_READY_SCRIPT = """
+() => [...document.querySelectorAll('link[rel="stylesheet"]')].every(link => link.sheet !== null || link.disabled)
+    && (!document.fonts || document.fonts.status === 'loaded')
+"""
 DESKTOP_VIEWPORT = {"width": 1366, "height": 768}
 MOBILE_VIEWPORT = {"width": 390, "height": 844}
 COOKIE_BANNER_SELECTORS = (
@@ -22,6 +27,16 @@ COOKIE_BANNER_SELECTORS = (
     ".cc-window", "#didomi-host", "#didomi-notice", ".iubenda-cs-container", "#usercentrics-root", "#cmplz-cookiebanner-container",
     "#moove_gdpr_cookie_info_bar", ".cookie-banner", "#cookie-banner", ".wpcc-container", "#qc-cmp2-container", "#sp_message_container",
 )
+# Registered before any page script runs, so that the largest paint is captured as it happens
+LARGEST_PAINT_OBSERVER_SCRIPT = """
+window.__prospectLargestPaint = null;
+try {
+    new PerformanceObserver((entryList) => {
+        const paintEntries = entryList.getEntries();
+        if (paintEntries.length) window.__prospectLargestPaint = paintEntries[paintEntries.length - 1].startTime;
+    }).observe({ type: 'largest-contentful-paint', buffered: true });
+} catch (error) {}
+"""
 PAGE_MEASUREMENT_SCRIPT = """
 (cookieBannerSelectors) => {
     const isInFirstViewport = (element) => {
@@ -41,11 +56,38 @@ PAGE_MEASUREMENT_SCRIPT = """
         .filter(Boolean)
         .slice(0, 80);
     const headingElement = document.querySelector('h1, h2');
+    const mostCommonValue = (values) => {
+        const counts = new Map();
+        values.forEach(value => counts.set(value, (counts.get(value) || 0) + 1));
+        return [...counts.entries()].sort((first, second) => second[1] - first[1]).map(entry => entry[0])[0] || null;
+    };
+    const firstPaintEntry = performance.getEntriesByType('paint').find(paintEntry => paintEntry.name === 'first-contentful-paint');
+    const measureLayoutModernity = () => {
+        let flexOrGridCount = 0;
+        let floatCount = 0;
+        for (const element of [...document.querySelectorAll('body *')].slice(0, 3000)) {
+            const elementStyle = getComputedStyle(element);
+            if (elementStyle.display.includes('flex') || elementStyle.display.includes('grid')) flexOrGridCount += 1;
+            if (elementStyle.float === 'left' || elementStyle.float === 'right') floatCount += 1;
+        }
+        const images = [...document.images];
+        return {
+            flexOrGridCount,
+            floatCount,
+            semanticElementCount: document.querySelectorAll('header, nav, main, section, article, footer, aside').length,
+            imageCount: images.length,
+            modernImageCount: images.filter(image => /\\.(webp|avif)(\\?|$)/i.test(image.currentSrc || image.src)).length
+                + document.querySelectorAll('source[type="image/webp"], source[type="image/avif"]').length,
+            lazyImageCount: document.querySelectorAll('img[loading="lazy"]').length,
+            loadedWebFonts: document.fonts ? [...new Set([...document.fonts].filter(font => font.status === 'loaded').map(font => font.family.replace(/["']/g, '')))].slice(0, 8) : [],
+        };
+    };
     return {
         viewportWidth: window.innerWidth,
         documentWidth: Math.max(document.documentElement.scrollWidth, bodyElement.scrollWidth),
         bodyFontSize: parseFloat(bodyStyle.fontSize),
         bodyFontFamily: bodyStyle.fontFamily,
+        paragraphFontFamily: mostCommonValue(paragraphs.slice(0, 30).map(element => getComputedStyle(element).fontFamily)),
         headingFontFamily: headingElement ? getComputedStyle(headingElement).fontFamily : null,
         medianParagraphFontSize: paragraphFontSizes.length ? paragraphFontSizes[Math.floor(paragraphFontSizes.length / 2)] : null,
         jqueryVersion: window.jQuery && window.jQuery.fn ? window.jQuery.fn.jquery : null,
@@ -56,6 +98,9 @@ PAGE_MEASUREMENT_SCRIPT = """
         cookieBannerDetected: cookieBannerSelectors.some(selector => document.querySelector(selector) !== null)
             || /cookie|traceur|consentement/i.test([...document.querySelectorAll('[class*=cookie], [id*=cookie], [class*=consent], [id*=consent]')].map(element => element.innerText).join(' ')),
         visibleTextLength: (bodyElement.innerText || '').length,
+        ...measureLayoutModernity(),
+        largestContentfulPaintMilliseconds: window.__prospectLargestPaint ? Math.round(window.__prospectLargestPaint) : null,
+        firstContentfulPaintMilliseconds: firstPaintEntry ? Math.round(firstPaintEntry.startTime) : null,
     };
 }
 """
@@ -67,6 +112,7 @@ class ViewportRender:
     screenshot_path: str | None = None
     measurements: dict[str, Any] = field(default_factory=dict)
     console_error_count: int = 0
+    page_error_count: int = 0
     request_count: int = 0
     transferred_bytes: int = 0
     http_resource_urls: list[str] = field(default_factory=list)
@@ -84,12 +130,17 @@ class RenderResult:
 
 
 async def wait_for_page_settled(page: Page) -> None:
-    """Wait for the load event then for network quiet, tolerating pages that never settle."""
+    """Wait for the load event, the stylesheets, the web fonts and network quiet, tolerating pages that never settle."""
     for load_state, timeout_milliseconds in (("load", LOAD_EVENT_TIMEOUT_MS), ("networkidle", NETWORK_IDLE_TIMEOUT_MS)):
         try:
             await page.wait_for_load_state(load_state, timeout=timeout_milliseconds)
         except PlaywrightTimeoutError:
             logger.debug("Page %s did not reach %s state", page.url, load_state)
+    try:
+        # Measuring before the stylesheets apply would describe an unstyled page: default fonts and no layout
+        await page.wait_for_function(STYLES_READY_SCRIPT, timeout=STYLES_READY_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        logger.debug("Stylesheets or fonts of %s never finished loading", page.url)
 
 
 async def navigate(page: Page, url: str) -> None:
@@ -99,7 +150,7 @@ async def navigate(page: Page, url: str) -> None:
             await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
             return
         except PlaywrightError as error:
-            if attempt_number == NAVIGATION_ATTEMPTS or "net::" not in str(error):
+            if attempt_number == NAVIGATION_ATTEMPTS or not any(marker in str(error) for marker in ("net::", "chrome-error://")):
                 raise
             logger.info("Navigation to %s failed (%s), retrying", url, str(error).splitlines()[0])
 
@@ -116,6 +167,7 @@ async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile:
     )
     viewport_render = ViewportRender()
     try:
+        await browser_context.add_init_script(LARGEST_PAINT_OBSERVER_SCRIPT)
         page = await browser_context.new_page()
         devtools_session = await browser_context.new_cdp_session(page)
         await devtools_session.send("Network.enable")
@@ -129,7 +181,7 @@ async def render_viewport(browser: Browser, url: str, viewport: dict, is_mobile:
             if console_message.type == "error":
                 viewport_render.console_error_count += 1
         def record_page_error(_page_error) -> None:
-            viewport_render.console_error_count += 1
+            viewport_render.page_error_count += 1
         devtools_session.on("Network.loadingFinished", record_transferred_bytes)
         page.on("request", record_request)
         page.on("console", record_console_message)

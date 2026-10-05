@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.config import BROWSER_USER_AGENT
 from app.database import get_database, utc_now_iso
@@ -14,11 +15,13 @@ from app.events import event_bus
 from app.prospects import prospect_repository
 from app.reports.llm_writer import enhance_report_with_language_model
 from app.reports.rules import build_missing_website_findings, build_rule_based_report
+from app.reports.visual_review import assess_screenshot
 from app.scanner.analyzers import AnalysisInput, analyze_website
 from app.scanner.catalog import build_finding, compute_opportunity_level, compute_score
+from app.scanner.crawler import crawl_internal_pages
 from app.scanner.http_probe import check_http_redirect, fetch_homepage, inspect_certificate
 from app.scanner.lighthouse import run_lighthouse
-from app.scanner.renderer import render_website
+from app.scanner.renderer import RenderResult, render_website
 from app.sectors import get_sector
 from app.settings_service import load_settings
 
@@ -60,13 +63,39 @@ def store_scan(prospect_identifier: int, scan_values: dict[str, Any]) -> int:
     return cursor.lastrowid
 
 
+BLOCKED_PAGE_MARKERS = ("just a moment", "checking your browser", "attention required", "access denied", "verifier que vous etes humain", "vérifiez que vous êtes humain", "captcha")
+
+
+def visible_word_count(html: str) -> int:
+    """Count the visible words of a page."""
+    soup = BeautifulSoup(html or "", "lxml")
+    for invisible_element in soup(["script", "style", "noscript", "template"]):
+        invisible_element.extract()
+    return len(soup.get_text(" ", strip=True).split())
+
+
+def find_render_problem(render: RenderResult, probe_html: str) -> str | None:
+    """Explain why a browser render cannot be trusted, or return None when it shows the real site."""
+    if render.error:
+        return render.error
+    if (render.final_url or "").startswith("chrome-error://"):
+        return "page d'erreur du navigateur"
+    rendered_text = BeautifulSoup(render.rendered_html or "", "lxml").get_text(" ", strip=True).lower()
+    if len(rendered_text) < 600 and any(marker in rendered_text for marker in BLOCKED_PAGE_MARKERS):
+        return "page bloquée par une protection anti-robot"
+    probe_word_count = visible_word_count(probe_html)
+    if probe_word_count >= 100 and visible_word_count(render.rendered_html) < probe_word_count * 0.2:
+        return "page affichée quasiment vide par rapport au code source"
+    return None
+
+
 async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     """Collect every observation on a website and analyse it."""
     website_url = prospect["website_url"]
     probe = await fetch_homepage(website_url)
     if not probe.reachable:
         unreachable_finding = build_finding("site_unreachable", detail=probe.error or "erreur inconnue")
-        return {"reachable": False, "final_url": probe.final_url, "http_status": probe.status_code, "findings": [unreachable_finding], "metrics": {"error": probe.error}, "contacts": {}}
+        return {"reachable": False, "final_url": probe.final_url, "http_status": probe.status_code, "findings": [unreachable_finding], "strengths": [], "metrics": {"error": probe.error}, "contacts": {}}
     final_url = probe.final_url or website_url
     parsed_final_url = urlparse(final_url)
     https_alternative_reachable = False
@@ -74,33 +103,44 @@ async def audit_reachable_website(prospect: dict[str, Any], settings: dict[str, 
         https_alternative_reachable = await url_answers(f"https://{parsed_final_url.netloc}/")
     else:
         probe.http_redirects_to_https = await check_http_redirect(parsed_final_url.netloc)
-    certificate, render, favicon_found = await asyncio.gather(
+    certificate, render, favicon_found, crawled_pages = await asyncio.gather(
         inspect_certificate(final_url),
         render_website(final_url, f"{prospect['id']}_{int(time.time())}"),
         url_answers(f"{parsed_final_url.scheme}://{parsed_final_url.netloc}/favicon.ico"),
+        crawl_internal_pages(final_url, probe.html, int(settings["crawl_internal_pages"])),
     )
     lighthouse_scores = await run_lighthouse(final_url) if settings["lighthouse_enabled"] else None
+    render_problem = find_render_problem(render, probe.html)
+    trusted_render = render if render_problem is None else None
+    visual_assessment = await assess_screenshot(render.desktop.screenshot_path) if trusted_render else None
     analysis_output = analyze_website(AnalysisInput(
         website_url=website_url,
         sector=get_sector(prospect.get("sector_key")),
         probe=probe,
         certificate=certificate,
         https_alternative_reachable=https_alternative_reachable,
-        render=render if not render.error else None,
+        render=trusted_render,
+        crawled_pages=crawled_pages,
         lighthouse_scores=lighthouse_scores,
+        visual_assessment=visual_assessment,
         favicon_found=favicon_found,
+        google_rating=prospect.get("google_rating"),
+        google_review_count=prospect.get("google_review_count"),
     ))
-    if render.error or render.mobile_error:
-        analysis_output.metrics["render_error"] = render.error or f"mobile : {render.mobile_error}"
+    if visual_assessment:
+        analysis_output.metrics["visual_assessment"] = visual_assessment
+    if render_problem or render.mobile_error:
+        analysis_output.metrics["render_error"] = render_problem or f"mobile : {render.mobile_error}"
     return {
         "reachable": True,
         "final_url": final_url,
         "http_status": probe.status_code,
         "findings": analysis_output.findings,
+        "strengths": analysis_output.strengths,
         "metrics": analysis_output.metrics,
         "contacts": analysis_output.contacts,
-        "desktop_screenshot": render.desktop.screenshot_path,
-        "mobile_screenshot": render.mobile.screenshot_path,
+        "desktop_screenshot": render.desktop.screenshot_path if trusted_render else None,
+        "mobile_screenshot": render.mobile.screenshot_path if trusted_render else None,
     }
 
 
@@ -112,14 +152,14 @@ async def scan_prospect(prospect_identifier: int) -> dict[str, Any] | None:
     settings = load_settings()
     if prospect.get("website_url"):
         scan_values = await audit_reachable_website(prospect, settings)
-        score = compute_score(scan_values["findings"]) if scan_values["reachable"] else 0
+        score = compute_score(scan_values["findings"], scan_values["metrics"].get("unmeasured_categories")) if scan_values["reachable"] else 0
         opportunity_level = compute_opportunity_level(score, has_website=True, reachable=scan_values["reachable"])
     else:
-        scan_values = {"reachable": False, "findings": build_missing_website_findings(prospect), "metrics": {}, "contacts": {}}
+        scan_values = {"reachable": False, "findings": build_missing_website_findings(prospect), "strengths": [], "metrics": {}, "contacts": {}}
         score = None
         opportunity_level = compute_opportunity_level(None, has_website=False)
     scan_values["score"] = score
-    report = build_rule_based_report(prospect, scan_values["findings"], score, opportunity_level, settings)
+    report = build_rule_based_report(prospect, scan_values["findings"], scan_values["strengths"], score, opportunity_level, settings, scan_values["metrics"].get("unmeasured_categories"))
     scan_values["report"] = await enhance_report_with_language_model(prospect, report)
     store_scan(prospect_identifier, scan_values)
     contacts = scan_values.get("contacts") or {}

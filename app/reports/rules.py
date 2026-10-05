@@ -1,7 +1,7 @@
 """Rule based sales report: diagnosis, improvement plan, phone script and follow-up email."""
 from typing import Any
 
-from app.scanner.catalog import build_finding, sort_findings
+from app.scanner.catalog import build_finding, compute_score_breakdown, sort_findings
 from app.sectors import Sector, get_sector
 from app.text_utils import format_place_name
 
@@ -11,6 +11,7 @@ OPPORTUNITY_VERDICTS = {
     "warm": "Le site est fonctionnel mais vieillissant : plusieurs améliorations rapides augmenteraient les contacts.",
     "cold": "Le site est globalement correct : l'angle d'approche sera l'optimisation (vitesse, référencement, conversion) plutôt que la refonte.",
 }
+COMPLIMENT_STRENGTHS = {"good_reputation", "rich_content", "online_booking", "recently_updated"}
 COMMON_OBJECTIONS = (
     ("« Je n'ai pas le temps. »", "Je comprends, c'est justement pour ça que je vous appelle maintenant et pas en pleine heure de rush : je vous envoie un résumé par mail et on en reparle quand ça vous arrange ?"),
     ("« J'ai déjà quelqu'un qui s'occupe du site. »", "Très bien. Je peux quand même vous envoyer l'audit gratuitement, vous pourrez le transmettre à votre prestataire : ce sont des points concrets à corriger."),
@@ -38,19 +39,18 @@ def build_signature(settings: dict[str, Any]) -> str:
     return "\n".join(line for line in signature_lines if line)
 
 
-def build_call_script(prospect: dict[str, Any], sector: Sector, hooks: list[str], settings: dict[str, Any]) -> list[dict[str, Any]]:
+def build_call_script(prospect: dict[str, Any], sector: Sector, hooks: list[str], strengths: list[dict[str, str]], settings: dict[str, Any]) -> list[dict[str, Any]]:
     """Build a structured phone script for a first cold call."""
     freelancer_city = settings.get("freelancer_city") or prospect.get("city") or "[votre ville]"
     hook_lines = hooks[:2] or [f"Je travaille avec des entreprises comme la vôtre pour {sector.pitch_angle}."]
-    return [
-        {
-            "title": "1. Ouverture (10 secondes)",
-            "lines": [
-                f"Bonjour, {freelancer_display_name(settings)}, développeur web à {freelancer_city}. Je suis bien chez {prospect['name']} ?",
-                "Je ne vous dérange pas longtemps, j'ai une question rapide au sujet de votre site Internet." if prospect.get("website_url") else "Je ne vous dérange pas longtemps, j'ai une question rapide au sujet de votre visibilité sur Internet.",
-            ],
-        },
-        {"title": "2. Accroche personnalisée", "lines": hook_lines},
+    opening_lines = [f"Bonjour, {freelancer_display_name(settings)}, développeur web à {freelancer_city}. Je suis bien chez {prospect['name']} ?"]
+    if prospect.get("manager_name"):
+        opening_lines.append(f"Pourrais-je parler à {prospect['manager_name']}, s'il vous plaît ? (dirigeant d'après le registre officiel)")
+    opening_lines.append("Je ne vous dérange pas longtemps, j'ai une question rapide au sujet de votre site Internet." if prospect.get("website_url") else "Je ne vous dérange pas longtemps, j'ai une question rapide au sujet de votre visibilité sur Internet.")
+    compliment_lines = [f"Commencer par un compliment sincère : « {strength['label']} », c'est un vrai atout." for strength in strengths if strength["code"] in COMPLIMENT_STRENGTHS][:2]
+    script_sections = [
+        {"title": "1. Ouverture (10 secondes)", "lines": opening_lines},
+        {"title": "2. Accroche personnalisée", "lines": compliment_lines + hook_lines},
         {"title": "3. Questions de découverte", "lines": list(sector.discovery_questions)},
         {
             "title": "4. Proposition",
@@ -62,6 +62,7 @@ def build_call_script(prospect: dict[str, Any], sector: Sector, hooks: list[str]
         },
         {"title": "5. Objections fréquentes", "lines": [f"{objection} → {answer}" for objection, answer in COMMON_OBJECTIONS]},
     ]
+    return script_sections
 
 
 def build_follow_up_email(prospect: dict[str, Any], sector: Sector, problems: list[dict[str, Any]], settings: dict[str, Any]) -> dict[str, str]:
@@ -112,7 +113,26 @@ def build_summary(prospect: dict[str, Any], score: int | None, opportunity_level
     return summary
 
 
-def build_rule_based_report(prospect: dict[str, Any], findings: list[dict[str, Any]], score: int | None, opportunity_level: str, settings: dict[str, Any]) -> dict[str, Any]:
+def suggest_offer(opportunity_level: str, score: int | None) -> dict[str, str]:
+    """Recommend what to sell, depending on the state of the current website."""
+    if opportunity_level == "no_website":
+        return {"title": "Création d'un site vitrine", "pitch": "Site simple, rapide et pensé mobile, avec bouton d'appel, plan d'accès et fiche Google optimisée."}
+    if score is not None and score < 50:
+        return {"title": "Refonte complète", "pitch": "Le site actuel fait perdre des clients : une refonte moderne est plus rentable que des corrections au cas par cas."}
+    if score is not None and score < 70:
+        return {"title": "Modernisation ciblée", "pitch": "Garder la base, corriger les points bloquants (mobile, vitesse, conversion) et rafraîchir le design."}
+    return {"title": "Optimisation et maintenance", "pitch": "Site correct : proposer l'amélioration de la conversion, du référencement local et un contrat de maintenance mensuel."}
+
+
+def build_rule_based_report(
+    prospect: dict[str, Any],
+    findings: list[dict[str, Any]],
+    strengths: list[dict[str, str]],
+    score: int | None,
+    opportunity_level: str,
+    settings: dict[str, Any],
+    unmeasured_buckets: list[str] | None = None,
+) -> dict[str, Any]:
     """Assemble the full sales report for a prospect."""
     sector = get_sector(prospect.get("sector_key"))
     problems = sort_findings(findings)
@@ -120,9 +140,13 @@ def build_rule_based_report(prospect: dict[str, Any], findings: list[dict[str, A
     return {
         "generator": "rules",
         "summary": build_summary(prospect, score, opportunity_level, problems),
+        "offer": suggest_offer(opportunity_level, score),
+        "call_arguments": hooks[:3],
+        "strengths": strengths,
+        "score_breakdown": compute_score_breakdown(findings, unmeasured_buckets) if prospect.get("website_url") and score is not None else None,
         "problems": problems,
         "improvements": build_improvement_plan(sector, problems),
-        "call_script": build_call_script(prospect, sector, hooks, settings),
+        "call_script": build_call_script(prospect, sector, hooks, strengths, settings),
         "email": build_follow_up_email(prospect, sector, problems, settings),
     }
 

@@ -125,6 +125,22 @@ class JobManager:
         job.task.cancel()
         return True
 
+    def remove(self, job_identifier: int) -> bool:
+        """Forget a finished job so that it leaves the interface."""
+        job = self._jobs.get(job_identifier)
+        if job is None or job.status == "running":
+            return False
+        del self._jobs[job_identifier]
+        event_bus.publish("job.removed", {"id": job_identifier})
+        return True
+
+    def clear_finished(self) -> int:
+        """Forget every finished, failed or cancelled job."""
+        finished_identifiers = [job.identifier for job in self._jobs.values() if job.status != "running"]
+        for job_identifier in finished_identifiers:
+            self.remove(job_identifier)
+        return len(finished_identifiers)
+
     def list_jobs(self) -> list[dict[str, Any]]:
         """Return every known job, most recent first."""
         return [job.to_dict() for job in sorted(self._jobs.values(), key=lambda job: job.identifier, reverse=True)]

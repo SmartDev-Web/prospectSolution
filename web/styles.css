@@ -1,4 +1,7 @@
 :root {
+  --color-good: #2f9e44;
+  --color-average: #f08c00;
+  --color-bad: #e03131;
   --color-background: #f5f6f8;
   --color-surface: #ffffff;
   --color-surface-muted: #eef0f4;
@@ -240,6 +243,32 @@ legend { font-weight: 600; padding: 0 6px; }
 .metrics-table td { padding: 5px 8px; border-bottom: 1px solid var(--color-border); }
 .metrics-table td:first-child { color: var(--color-text-muted); width: 45%; }
 .activity { padding: 6px 0; border-bottom: 1px solid var(--color-border); }
+.small-text { font-size: 12px; }
+.action-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.action-bar a.button { text-decoration: none; display: inline-block; }
+.origin-line { margin: 10px 0 0; font-size: 13px; }
+.origin-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; background: var(--color-surface-muted); border: 1px solid var(--color-border); font-weight: 600; }
+.website-block { margin: 10px 0; }
+.website-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; overflow-wrap: anywhere; }
+.confidence { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.confidence-high { background: color-mix(in srgb, var(--color-good) 18%, transparent); color: var(--color-good); }
+.confidence-medium { background: color-mix(in srgb, var(--color-average) 20%, transparent); color: var(--color-average); }
+.offer-card { border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface)); border: 1px solid color-mix(in srgb, var(--color-primary) 40%, transparent); }
+.offer-label { font-size: 12px; text-transform: uppercase; color: var(--color-text-muted); }
+.offer-title { font-size: 17px; font-weight: 700; margin: 2px 0 4px; }
+.synthesis-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0 12px; }
+.score-breakdown { display: grid; gap: 6px; }
+.breakdown-row { display: grid; grid-template-columns: 130px 1fr 52px; gap: 8px; align-items: center; font-size: 13px; }
+.breakdown-track { height: 8px; border-radius: 999px; background: var(--color-surface-muted); overflow: hidden; }
+.breakdown-bar { height: 100%; border-radius: 999px; }
+.breakdown-bar.good { background: var(--color-good); }
+.breakdown-bar.average { background: var(--color-average); }
+.breakdown-bar.bad { background: var(--color-bad); }
+.breakdown-value { text-align: right; color: var(--color-text-muted); }
+.strength-list { list-style: none; padding: 0; margin: 0; }
+.strength-list li { padding: 3px 0; }
+.source-hint { font-size: 11px; color: var(--color-text-muted); }
+.search-link { font-size: 13px; }
 .card-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
 .call-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 12px; cursor: pointer; }
 .call-card:hover { border-color: var(--color-primary); }
@@ -251,6 +280,9 @@ legend { font-weight: 600; padding: 0 6px; }
 .job { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 10px; margin-top: 8px; box-shadow: var(--shadow); }
 .job-header { display: flex; gap: 8px; align-items: center; }
 .job-label { font-weight: 600; flex: 1; }
+.job-dismiss { border: none; background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 6px; }
+.job-dismiss:hover { background: var(--color-surface-muted); color: var(--color-text); }
+.jobs-clear { margin-top: 8px; width: 100%; background: var(--color-surface); }
 .job-message { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; margin-top: 4px; }
 .progress { height: 6px; background: var(--color-surface-muted); border-radius: 999px; overflow: hidden; margin-top: 6px; }
 .progress-bar { height: 100%; background: var(--color-primary); transition: width 0.3s; }
@@ -264,7 +296,8 @@ legend { font-weight: 600; padding: 0 6px; }
   .search-layout { grid-template-columns: 1fr; }
   .map-panel { position: static; }
   .map { height: 320px; min-height: 0; }
-  .crm-block, .screenshots { grid-template-columns: 1fr; }
+  .crm-block, .screenshots, .synthesis-columns { grid-template-columns: 1fr; }
+  .breakdown-row { grid-template-columns: 110px 1fr 48px; }
   .brand { display: none; }
   .prospect-table thead { display: none; }
   .prospect-table, .prospect-table tbody, .prospect-table tr, .prospect-table td { display: block; width: 100%; }

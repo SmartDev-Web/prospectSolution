@@ -152,6 +152,22 @@ FINDING_DEFINITIONS: tuple[FindingDefinition, ...] = (
         "En bas de votre site, il est écrit © {year} : pour un client qui découvre l'entreprise, ça donne l'impression que le site est abandonné.",
     ),
     FindingDefinition(
+        "dated_design", "design", "major", "Design daté ({detail})",
+        "Au premier coup d'œil, le site paraît ancien. Le visiteur en déduit que l'entreprise est dépassée, voire fermée, et va voir un concurrent dont le site inspire confiance.",
+        "Refondre le design : mise en page aérée, typographie moderne, grandes photos, palette cohérente avec l'identité de l'entreprise.",
+        "Honnêtement, votre site donne l'impression d'avoir une dizaine d'années : pour un client qui vous découvre, il ne reflète pas la qualité de votre travail.",
+    ),
+    FindingDefinition(
+        "outdated_framework", "technology", "minor", "Bibliothèques de mise en page anciennes ({detail})",
+        "Ces versions ne sont plus maintenues : affichage moins soigné sur les écrans récents et failles de sécurité non corrigées.",
+        "Mettre à jour les bibliothèques lors d'une modernisation du site.",
+    ),
+    FindingDefinition(
+        "no_phone_on_homepage", "conversion", "minor", "Numéro absent de la page d'accueil",
+        "Le téléphone n'apparaît que sur une page secondaire : le visiteur pressé ne le trouve pas tout de suite.",
+        "Afficher le numéro en haut de chaque page, cliquable sur mobile.",
+    ),
+    FindingDefinition(
         "dated_typography", "design", "minor", "Typographie datée ({detail})",
         "Les polices par défaut ou fantaisie donnent immédiatement un aspect amateur ou ancien au site.",
         "Choisir une typographie moderne et lisible, cohérente avec l'image de l'entreprise.",
@@ -367,17 +383,73 @@ def sort_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(findings, key=lambda finding: SEVERITY_ORDER[finding["severity"]])
 
 
-def compute_score(findings: list[dict[str, Any]]) -> int:
-    """Compute a 0-100 website quality score from the findings."""
-    total_penalty = sum(SEVERITY_PENALTIES[finding["severity"]] for finding in findings)
-    return max(0, 100 - total_penalty)
+SCORE_BUCKETS = {
+    "security": ("Sécurité", 15),
+    "mobile": ("Mobile", 20),
+    "performance": ("Vitesse", 15),
+    "design": ("Design et technique", 20),
+    "conversion": ("Conversion", 20),
+    "seo": ("Référencement", 7),
+    "legal": ("Légal", 3),
+}
+CATEGORY_TO_BUCKET = {
+    "availability": "security", "security": "security", "mobile": "mobile", "performance": "performance",
+    "design": "design", "technology": "design", "content": "design", "conversion": "conversion", "sector": "conversion",
+    "seo": "seo", "legal": "legal",
+}
+SEVERITY_BUCKET_SHARE = {"critical": 0.8, "major": 0.4, "minor": 0.12}
+CRITICAL_SCORE_CAP = 40
+STRENGTH_LABELS = {
+    "secure": "Site sécurisé (HTTPS valide)",
+    "responsive": "Bien adapté au mobile",
+    "fast": "Affichage rapide ({seconds} s)",
+    "modern_stack": "Technologie récente ({detail})",
+    "modern_layout": "Mise en page moderne",
+    "click_to_call": "Numéro cliquable sur mobile",
+    "online_booking": "Réservation ou commande en ligne",
+    "recently_updated": "Site tenu à jour (© {year})",
+    "legal_ok": "Mentions légales présentes",
+    "good_reputation": "Très bonne réputation Google ({rating} ★, {count} avis)",
+    "rich_content": "Contenu riche ({count} mots)",
+}
+
+
+def build_strength(code: str, **evidence: Any) -> dict[str, str]:
+    """Create a strength entry, the positive counterpart of a finding."""
+    return {"code": code, "label": format_text(STRENGTH_LABELS[code], evidence)}
+
+
+def compute_score_breakdown(findings: list[dict[str, Any]], unmeasured_buckets: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    """Score every category of the site, each limited to its own weight; unmeasured categories get no score."""
+    penalty_shares = {bucket_key: 0.0 for bucket_key in SCORE_BUCKETS}
+    for finding in findings:
+        penalty_shares[CATEGORY_TO_BUCKET[finding["category"]]] += SEVERITY_BUCKET_SHARE[finding["severity"]]
+    return {
+        bucket_key: {
+            "label": bucket_label,
+            "weight": bucket_weight,
+            "measured": bucket_key not in (unmeasured_buckets or []),
+            "score": round(bucket_weight * max(0.0, 1 - penalty_shares[bucket_key]), 1),
+        }
+        for bucket_key, (bucket_label, bucket_weight) in SCORE_BUCKETS.items()
+    }
+
+
+def compute_score(findings: list[dict[str, Any]], unmeasured_buckets: list[str] | None = None) -> int:
+    """Compute a 0-100 website quality score from the measured categories, capped when a critical issue exists."""
+    measured_buckets = [bucket for bucket in compute_score_breakdown(findings, unmeasured_buckets).values() if bucket["measured"]]
+    measured_weight = sum(bucket["weight"] for bucket in measured_buckets)
+    total_score = round(100 * sum(bucket["score"] for bucket in measured_buckets) / measured_weight) if measured_weight else 0
+    if any(finding["severity"] == "critical" for finding in findings):
+        return min(total_score, CRITICAL_SCORE_CAP)
+    return total_score
 
 
 def compute_opportunity_level(score: int | None, has_website: bool, reachable: bool = True) -> str:
     """Translate a score into a prospecting priority."""
     if not has_website:
         return "no_website"
-    if not reachable or score is None or score < 45:
+    if not reachable or score is None or score < 50:
         return "hot"
     if score < 70:
         return "warm"

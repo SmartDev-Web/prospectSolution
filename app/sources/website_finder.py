@@ -1,137 +1,78 @@
 """Discovery of a business website when the data source does not provide one."""
 import asyncio
 import logging
-import random
-import re
-import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
-from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 
 from app.config import BROWSER_USER_AGENT
-from app.text_utils import extract_domain, slugify, strip_accents, tokenize_company_name
+from app.sources.search_engines import SearchEngineRouter
+from app.sources.website_verification import (
+    GENERIC_NAME_WORDS,
+    BusinessIdentity,
+    PageEvidence,
+    ParsedPage,
+    evaluate_pages,
+    find_location_subpages,
+    is_directory_url,
+    parse_page,
+    website_root,
+)
+from app.text_utils import extract_domain, slugify, tokenize_company_name
 
 logger = logging.getLogger(__name__)
-SEARCH_ENGINE_URL = "https://html.duckduckgo.com/html/"
-CANDIDATE_TOP_LEVEL_DOMAINS = ("fr", "com")
-DIRECTORY_DOMAINS = (
-    "pagesjaunes.fr", "societe.com", "pappers.fr", "infogreffe.fr", "verif.com", "manageo.fr", "annuaire-entreprises.data.gouv.fr",
-    "tripadvisor", "thefork.fr", "lafourchette.com", "ubereats.com", "deliveroo.fr", "google.", "yelp.", "mappy.com", "justacote.com",
-    "petitfute.com", "linkedin.com", "wikipedia.org", "planity.com", "treatwell.fr", "kompass.com", "europages", "doctolib.fr",
-    "118712.fr", "118000.fr", "bing.com", "duckduckgo.com", "youtube.com", "tiktok.com", "x.com", "twitter.com", "waze.com",
-    "restaurantguru", "sortiraparis", "corporama.com", "b-reputation.com", "hoodspot.fr", "cylex", "horaires.lefigaro.fr",
-    "pagespro.com", "lexpress.fr", "entreprises.lefigaro.fr", "dirigeant.societe.com", "score3.fr", "infonet.fr", "annuaire.",
-)
+CANDIDATE_TOP_LEVEL_DOMAINS = ("fr", "com", "eu", "net", "org", "info")
+MAXIMUM_DOMAIN_LABELS = 10
+MAXIMUM_SEARCH_RESULTS_CHECKED = 5
 SOCIAL_DOMAINS = ("facebook.com", "instagram.com")
-PARKED_PAGE_MARKERS = (
-    "domain is for sale", "ce domaine est a vendre", "this domain is parked", "domaine en vente", "buy this domain", "sedo",
-    "parkingcrew", "domain parking", "nom de domaine est disponible", "site en cours de construction par ovh", "hostinger",
-    "this domain may be for sale", "godaddy", "default web site page", "it works!",
-)
-MINIMUM_SEARCH_INTERVAL_SECONDS = 2.5
-SEARCH_ENGINE_BLOCKING_STATUS_CODES = {202, 403, 429}
+CONFIDENCE_RANK = {"high": 2, "medium": 1, None: 0}
 
 
 @dataclass
 class WebsiteDiscovery:
     """Outcome of a website discovery attempt."""
-    website_url: str | None
-    origin: str | None
+    website_url: str | None = None
+    origin: str | None = None
+    confidence: str | None = None
+    evidence: list[str] = field(default_factory=list)
     social_url: str | None = None
+    score: float = 0.0
 
 
-@dataclass
-class BusinessIdentity:
-    """What we know about a business to recognise its website."""
-    name: str
-    alternative_names: list[str]
-    city: str | None
-    postal_code: str | None
-    phone: str | None
-
-
-class SearchRateLimiter:
-    """Space out search engine requests so that the engine does not ban the user's IP address."""
-
-    def __init__(self, minimum_interval_seconds: float) -> None:
-        self._minimum_interval_seconds = minimum_interval_seconds
-        self._lock = asyncio.Lock()
-        self._last_request_time = 0.0
-
-    async def wait_turn(self) -> None:
-        """Wait until the next request is allowed by the rate limit."""
-        async with self._lock:
-            elapsed_seconds = time.monotonic() - self._last_request_time
-            remaining_seconds = self._minimum_interval_seconds + random.uniform(0, 1.5) - elapsed_seconds
-            if remaining_seconds > 0:
-                # Spacing requests is the only way to respect the engine's implicit rate limit
-                await asyncio.sleep(remaining_seconds)
-            self._last_request_time = time.monotonic()
-
-
-search_rate_limiter = SearchRateLimiter(MINIMUM_SEARCH_INTERVAL_SECONDS)
-
-
-def is_directory_url(url: str) -> bool:
-    """Tell whether a URL belongs to a directory or platform rather than the business itself."""
-    host_name = extract_domain(url) or ""
-    return any(directory_domain in host_name for directory_domain in DIRECTORY_DOMAINS)
-
-
-def is_social_url(url: str) -> bool:
-    """Tell whether a URL is a social network page."""
-    host_name = extract_domain(url) or ""
-    return any(host_name.endswith(social_domain) for social_domain in SOCIAL_DOMAINS)
+def build_domain_labels(identity: BusinessIdentity) -> list[str]:
+    """Generate plausible domain labels from the business names and city."""
+    city_joined = slugify(identity.city or "", "")
+    city_hyphenated = slugify(identity.city or "", "-")
+    domain_labels: list[str] = []
+    for name in identity.all_names()[:3]:
+        name_tokens = tokenize_company_name(name)
+        distinctive_tokens = [token for token in name_tokens if token not in GENERIC_NAME_WORDS]
+        variants = ["".join(name_tokens), "-".join(name_tokens), "".join(distinctive_tokens), "-".join(distinctive_tokens)]
+        if city_joined:
+            variants += [f"{''.join(name_tokens)}-{city_hyphenated}", f"{''.join(name_tokens)}{city_joined}", f"{''.join(distinctive_tokens)}-{city_hyphenated}"]
+        for domain_label in variants:
+            if 4 <= len(domain_label) <= 63 and domain_label not in GENERIC_NAME_WORDS and domain_label not in domain_labels:
+                domain_labels.append(domain_label)
+    return domain_labels[:MAXIMUM_DOMAIN_LABELS]
 
 
 def build_domain_candidates(identity: BusinessIdentity) -> list[str]:
-    """Generate plausible domain names derived from the business names and city."""
-    domain_labels: list[str] = []
-    city_slug = slugify(identity.city or "")
-    for name in [identity.name, *identity.alternative_names][:3]:
-        meaningful_tokens = tokenize_company_name(name)
-        if not meaningful_tokens:
-            continue
-        joined_label = "".join(meaningful_tokens)
-        hyphenated_label = "-".join(meaningful_tokens)
-        for domain_label in (joined_label, hyphenated_label, f"{hyphenated_label}-{city_slug}" if city_slug else ""):
-            if 3 <= len(domain_label) <= 63 and domain_label not in domain_labels:
-                domain_labels.append(domain_label)
-    return [f"{domain_label}.{top_level_domain}" for domain_label in domain_labels[:6] for top_level_domain in CANDIDATE_TOP_LEVEL_DOMAINS]
+    """Combine domain labels with the extensions small French businesses use."""
+    return [f"{domain_label}.{top_level_domain}" for domain_label in build_domain_labels(identity) for top_level_domain in CANDIDATE_TOP_LEVEL_DOMAINS]
 
 
-def page_belongs_to_business(page_html: str, identity: BusinessIdentity) -> bool:
-    """Check that a page mentions the business name and its location or phone number."""
-    page_text = strip_accents(BeautifulSoup(page_html, "lxml").get_text(" ", strip=True)).lower()
-    if any(parked_marker in page_text for parked_marker in PARKED_PAGE_MARKERS) and len(page_text) < 3000:
-        return False
-    name_tokens = {token for name in [identity.name, *identity.alternative_names] for token in tokenize_company_name(name) if len(token) >= 3}
-    if not name_tokens:
-        return False
-    matched_name_tokens = sum(1 for token in name_tokens if token in page_text)
-    name_matches = matched_name_tokens >= max(1, min(2, len(name_tokens)))
-    page_digits = re.sub(r"\D", "", page_text)
-    phone_digits = re.sub(r"\D", "", identity.phone or "")
-    location_matches = any((
-        bool(identity.postal_code) and identity.postal_code in page_text,
-        bool(identity.city) and strip_accents(identity.city).lower() in page_text,
-        len(phone_digits) >= 9 and phone_digits[-9:] in page_digits,
-    ))
-    return name_matches and location_matches
+def build_search_queries(identity: BusinessIdentity) -> list[str]:
+    """Build the search queries, from the most to the least specific."""
+    location = identity.city or identity.postal_code or ""
+    queries = [f"{name} {location}".strip() for name in identity.all_names()[:2]]
+    return list(dict.fromkeys(queries))
 
 
-async def fetch_page(client: httpx.AsyncClient, url: str) -> tuple[str, str] | None:
-    """Fetch a page and return its final URL and HTML, or None when unreachable."""
-    try:
-        response = await client.get(url)
-    except (httpx.HTTPError, UnicodeError):
-        return None
-    if response.status_code >= 400 or "html" not in response.headers.get("content-type", ""):
-        return None
-    return str(response.url), response.text
+def is_social_url(url: str) -> bool:
+    """Tell whether a URL is a Facebook or Instagram page."""
+    host_name = extract_domain(url) or ""
+    return any(host_name.endswith(social_domain) for social_domain in SOCIAL_DOMAINS)
 
 
 async def domain_resolves(domain_name: str) -> bool:
@@ -143,65 +84,23 @@ async def domain_resolves(domain_name: str) -> bool:
         return False
 
 
-async def discover_by_domain_guess(client: httpx.AsyncClient, identity: BusinessIdentity) -> str | None:
-    """Try domains derived from the business name and keep the first one that describes the business."""
-    for domain_name in build_domain_candidates(identity):
-        if not await domain_resolves(domain_name):
-            continue
-        fetched_page = await fetch_page(client, f"https://{domain_name}") or await fetch_page(client, f"http://{domain_name}")
-        if fetched_page and page_belongs_to_business(fetched_page[1], identity):
-            return fetched_page[0]
-    return None
-
-
-def extract_search_result_urls(results_html: str) -> list[str]:
-    """Extract destination URLs from a DuckDuckGo HTML results page."""
-    result_urls: list[str] = []
-    for result_link in BeautifulSoup(results_html, "lxml").select("a.result__a"):
-        link_target = result_link.get("href", "")
-        if "uddg=" in link_target:
-            link_target = unquote(parse_qs(urlparse(link_target).query).get("uddg", [""])[0])
-        if link_target.startswith("http") and link_target not in result_urls:
-            result_urls.append(link_target)
-    return result_urls
-
-
-class SearchEngineBlockedError(RuntimeError):
-    """Raised when the search engine answers with an anti-bot challenge instead of results."""
-
-
-async def discover_by_search_engine(client: httpx.AsyncClient, identity: BusinessIdentity) -> tuple[str | None, str | None]:
-    """Search the business on DuckDuckGo and verify the first plausible official website."""
-    await search_rate_limiter.wait_turn()
-    search_query = f"{identity.name} {identity.city or identity.postal_code or ''}".strip()
+async def fetch_page(client: httpx.AsyncClient, url: str) -> ParsedPage | None:
+    """Fetch and parse an HTML page, or return None when it is unreachable."""
+    if not url.startswith(("http://", "https://")):
+        return None
     try:
-        response = await client.post(SEARCH_ENGINE_URL, data={"q": search_query, "kl": "fr-fr"})
-    except httpx.HTTPError as error:
-        logger.warning("Search engine request failed for %s : %s", search_query, error)
-        return None, None
-    if response.status_code in SEARCH_ENGINE_BLOCKING_STATUS_CODES:
-        raise SearchEngineBlockedError(f"HTTP {response.status_code}")
-    if response.status_code != 200:
-        logger.warning("Search engine answered HTTP %s for %s", response.status_code, search_query)
-        return None, None
-    social_url = None
-    for result_url in extract_search_result_urls(response.text)[:6]:
-        if is_social_url(result_url):
-            social_url = social_url or result_url
-            continue
-        if is_directory_url(result_url):
-            continue
-        fetched_page = await fetch_page(client, result_url)
-        if fetched_page and page_belongs_to_business(fetched_page[1], identity):
-            parsed_url = urlparse(fetched_page[0])
-            return f"{parsed_url.scheme}://{parsed_url.netloc}/", social_url
-    return None, social_url
+        response = await client.get(url)
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError, ValueError):
+        return None
+    if response.status_code >= 400 or "html" not in response.headers.get("content-type", ""):
+        return None
+    return parse_page(str(response.url), response.text)
 
 
 def create_website_client() -> httpx.AsyncClient:
     """Create the HTTP client used to probe candidate websites."""
     return httpx.AsyncClient(
-        timeout=httpx.Timeout(10.0),
+        timeout=httpx.Timeout(12.0),
         follow_redirects=True,
         headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9"},
         verify=False,
@@ -209,26 +108,90 @@ def create_website_client() -> httpx.AsyncClient:
     )
 
 
-class WebsiteFinder:
-    """Website discovery for one job, disabling the search engine as soon as it starts blocking."""
+def better_discovery(first: WebsiteDiscovery | None, second: WebsiteDiscovery | None) -> WebsiteDiscovery | None:
+    """Keep the discovery with the highest confidence, then the highest score."""
+    candidates = [discovery for discovery in (first, second) if discovery and discovery.website_url]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda discovery: (CONFIDENCE_RANK[discovery.confidence], discovery.score))
 
-    def __init__(self, client: httpx.AsyncClient, use_search_engine: bool, log: Callable[[str], None]) -> None:
+
+class WebsiteFinder:
+    """Find and verify official websites for one job, sharing engines and their circuit breakers."""
+
+    def __init__(self, client: httpx.AsyncClient, search_router: SearchEngineRouter | None, log: Callable[[str], None]) -> None:
         self._client = client
-        self._search_engine_enabled = use_search_engine
+        self._search_router = search_router
         self._log = log
 
+    async def verify_site(self, url: str, identity: BusinessIdentity, found_by_search: bool) -> tuple[PageEvidence, str] | None:
+        """Score a candidate site, reading its contact and legal pages when the homepage is not conclusive."""
+        if extract_domain(url) in identity.rejected_domains:
+            return None
+        home_page = await fetch_page(self._client, url)
+        if home_page is None or is_directory_url(home_page.url) or extract_domain(home_page.url) in identity.rejected_domains:
+            return None
+        evidence = evaluate_pages(home_page, [], identity, found_by_search)
+        if evidence.name_matched and evidence.confidence != "high":
+            subpages = await asyncio.gather(*(fetch_page(self._client, subpage_url) for subpage_url in find_location_subpages(home_page)))
+            evidence = evaluate_pages(home_page, [subpage for subpage in subpages if subpage], identity, found_by_search)
+        return evidence, website_root(home_page.url)
+
+    async def discover_by_domain_guess(self, identity: BusinessIdentity) -> WebsiteDiscovery | None:
+        """Try domains derived from the business name, resolving them all in parallel."""
+        domain_candidates = build_domain_candidates(identity)
+        resolution_results = await asyncio.gather(*(domain_resolves(domain_name) for domain_name in domain_candidates))
+        best_discovery: WebsiteDiscovery | None = None
+        for domain_name in [domain_name for domain_name, resolves in zip(domain_candidates, resolution_results) if resolves]:
+            verification = await self.verify_site(f"https://{domain_name}", identity, False) or await self.verify_site(f"http://{domain_name}", identity, False)
+            if verification is None or verification[0].confidence is None:
+                continue
+            if verification[0].confidence == "medium" and not verification[0].full_name_in_domain:
+                # A guessed domain matching a single word ("littoral.com") is too ambiguous without hard proof
+                continue
+            evidence, root_url = verification
+            discovery = WebsiteDiscovery(website_url=root_url, origin="domain_guess", confidence=evidence.confidence, evidence=evidence.reasons, score=evidence.score)
+            best_discovery = better_discovery(best_discovery, discovery)
+            if evidence.confidence == "high":
+                break
+        return best_discovery
+
+    async def discover_by_search(self, identity: BusinessIdentity) -> WebsiteDiscovery:
+        """Search the business name and city, then verify the first plausible results."""
+        social_url = None
+        checked_roots: set[str] = set()
+        for query in build_search_queries(identity):
+            if not self._search_router.has_available_engine:
+                break
+            result_urls, engine_key = await self._search_router.search(self._client, query)
+            best_discovery: WebsiteDiscovery | None = None
+            for result_url in result_urls:
+                if is_social_url(result_url):
+                    social_url = social_url or result_url
+                    continue
+                root_url = website_root(result_url)
+                if is_directory_url(result_url) or root_url in checked_roots or len(checked_roots) >= MAXIMUM_SEARCH_RESULTS_CHECKED:
+                    continue
+                checked_roots.add(root_url)
+                verification = await self.verify_site(root_url, identity, True)
+                if verification and verification[0].confidence:
+                    evidence, verified_root = verification
+                    best_discovery = better_discovery(best_discovery, WebsiteDiscovery(
+                        website_url=verified_root, origin=engine_key, confidence=evidence.confidence, evidence=evidence.reasons, score=evidence.score,
+                    ))
+                    if evidence.confidence == "high":
+                        break
+            if best_discovery:
+                best_discovery.social_url = social_url
+                return best_discovery
+        return WebsiteDiscovery(social_url=social_url)
+
     async def discover(self, identity: BusinessIdentity) -> WebsiteDiscovery:
-        """Find the official website of a business, first by guessing its domain, then through a search engine."""
-        guessed_url = await discover_by_domain_guess(self._client, identity)
-        if guessed_url:
-            return WebsiteDiscovery(website_url=guessed_url, origin="domain_guess")
-        if not self._search_engine_enabled:
-            return WebsiteDiscovery(website_url=None, origin=None)
-        try:
-            found_url, social_url = await discover_by_search_engine(self._client, identity)
-        except SearchEngineBlockedError as error:
-            # Insisting after a challenge extends the ban, so the engine is skipped for the rest of the job
-            self._search_engine_enabled = False
-            self._log(f"⚠️ DuckDuckGo bloque temporairement les recherches ({error}) : la suite utilise uniquement la déduction du nom de domaine.")
-            return WebsiteDiscovery(website_url=None, origin=None)
-        return WebsiteDiscovery(website_url=found_url, origin="search_engine" if found_url else None, social_url=social_url)
+        """Find the official website: domain guessing first, then search engines when the guess is not certain."""
+        guessed_discovery = await self.discover_by_domain_guess(identity)
+        if guessed_discovery and guessed_discovery.confidence == "high":
+            return guessed_discovery
+        searched_discovery = await self.discover_by_search(identity) if self._search_router else WebsiteDiscovery()
+        best_discovery = better_discovery(guessed_discovery, searched_discovery) or WebsiteDiscovery()
+        best_discovery.social_url = best_discovery.social_url or searched_discovery.social_url
+        return best_discovery

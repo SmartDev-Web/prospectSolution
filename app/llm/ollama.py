@@ -162,15 +162,17 @@ class OllamaService:
         except httpx.HTTPError:
             return False
 
-    async def generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
-        """Ask the model for a JSON answer."""
-        settings = load_settings()
+    async def generate_json(self, system_prompt: str, user_prompt: str, model_name: str | None = None, images_base64: list[str] | None = None) -> dict[str, Any]:
+        """Ask a model for a JSON answer, optionally showing it images."""
+        user_message: dict[str, Any] = {"role": "user", "content": user_prompt}
+        if images_base64:
+            user_message["images"] = images_base64
         request_body = {
-            "model": settings["llm_model"],
+            "model": model_name or load_settings()["llm_model"],
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.4, "num_ctx": 4096},
-            "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            "options": {"temperature": 0.3, "num_ctx": 4096},
+            "messages": [{"role": "system", "content": system_prompt}, user_message],
         }
         async with httpx.AsyncClient(timeout=httpx.Timeout(GENERATION_TIMEOUT_SECONDS, connect=10.0)) as client:
             response = await client.post(f"{self.base_url()}/api/chat", json=request_body)

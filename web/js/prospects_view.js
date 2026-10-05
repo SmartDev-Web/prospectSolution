@@ -1,7 +1,7 @@
 // Prospect list with filters, statistics and bulk actions.
 import { buildQueryString, requestJson } from "./api.js";
 import { createElement, formatDate, readableHost, showToast } from "./dom.js";
-import { OPPORTUNITY_LABELS, STATUS_LABELS } from "./labels.js";
+import { OPPORTUNITY_LABELS, SOURCE_LABELS, STATUS_LABELS } from "./labels.js";
 import { renderScoreBadge } from "./components.js";
 import { liveEvents } from "./live.js";
 import { openProspectDetail } from "./prospect_detail.js";
@@ -27,7 +27,14 @@ function renderProspectRow(prospect) {
   const phoneCell = prospect.phone ? createElement("a", { href: `tel:${prospect.phone.replace(/\s/g, "")}`, text: prospect.phone, onClick: (clickEvent) => clickEvent.stopPropagation() }) : "";
   const websiteCell = prospect.website_url
     ? createElement("a", { className: "website-link", href: prospect.website_url, target: "_blank", rel: "noopener", text: readableHost(prospect.website_url), onClick: (clickEvent) => clickEvent.stopPropagation() })
-    : createElement("span", { className: "muted", text: "—" });
+    : createElement("a", {
+      className: "search-link",
+      href: `https://www.google.com/search?q=${encodeURIComponent([prospect.name, prospect.city].filter(Boolean).join(" "))}`,
+      target: "_blank",
+      rel: "noopener",
+      text: "🔎 Chercher sur Google",
+      onClick: (clickEvent) => clickEvent.stopPropagation(),
+    });
   const scanButton = createElement("button", {
     className: "button ghost small",
     text: prospect.last_scan_at ? "Ré-analyser" : "Analyser",
@@ -41,6 +48,7 @@ function renderProspectRow(prospect) {
     createElement("td", {}, [
       createElement("div", { className: "prospect-name", text: prospect.name }),
       createElement("div", { className: "prospect-category", text: prospect.category_label || "" }),
+      createElement("div", { className: "source-hint", text: `via ${(prospect.sources || []).map((source) => SOURCE_LABELS[source] || source).join(" + ")}` }),
     ]),
     createElement("td", { text: prospect.city || "" }),
     createElement("td", {}, phoneCell),
@@ -136,6 +144,28 @@ export function initializeProspectsView() {
     } catch (error) {
       showToast(error.message, "error");
     }
+  });
+  document.getElementById("discover-missing-websites").addEventListener("click", async () => {
+    try {
+      const job = await requestJson("/api/website-discovery", { method: "POST", body: { all_without_website: true } });
+      showToast(`${job.label} lancée`);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+  document.getElementById("enrich-phones").addEventListener("click", async () => {
+    if (!window.confirm("Chercher sur Google Maps les 30 meilleurs prospects sans téléphone ? (scraping modéré, même précautions que l'onglet Google Maps)")) return;
+    try {
+      const job = await requestJson("/api/google-maps-enrichment", { method: "POST", body: { all_without_phone: true, limit: 30 } });
+      showToast(`${job.label} lancée`);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+  document.getElementById("remove-chains").addEventListener("click", async () => {
+    if (!window.confirm("Supprimer tous les prospects reconnus comme chaînes ou franchises (McDonald's, Subway, Leclerc…) ?")) return;
+    const removal = await requestJson("/api/prospects/remove-chains", { method: "POST" });
+    showToast(removal.removed ? `${removal.removed} chaîne(s) retirée(s) : ${removal.names.slice(0, 6).join(", ")}${removal.removed > 6 ? "…" : ""}` : "Aucune chaîne trouvée.");
   });
   document.getElementById("scan-unscanned").addEventListener("click", async () => {
     try {

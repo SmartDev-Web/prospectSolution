@@ -40,6 +40,17 @@ Commencez par l'onglet **⚙️ Réglages** : renseignez votre prénom, votre vi
 
 **Astuce qui rapporte :** dans Open Data, le filtre **« Entreprises créées après le »** cible les entreprises récentes. Elles n'ont souvent ni site ni fiche Google, et c'est le moment où elles achètent.
 
+**Chaînes et franchises exclues** (McDonald's, Subway, Burger King, Leclerc, Brico Marché, Leroy Merlin…) : leur site est géré par le siège national, inutile de les appeler. La détection combine une liste d'environ 250 enseignes, 70 sites nationaux (subwayfrance.fr…), la marque déclarée dans OpenStreetMap et le nombre d'établissements de l'entreprise. Le bouton **🧹 Retirer les chaînes** nettoie une base existante.
+
+#### Comment l'outil trouve les sites web
+1. **Déduction du nom de domaine** : variantes du nom et de la ville × extensions `.fr`, `.com`, `.eu`, `.net`, `.org`, `.info`, toutes testées en parallèle.
+2. **Moteurs de recherche** (dans Réglages) : DuckDuckGo, Bing, et Google via un vrai navigateur en option (le plus pertinent, mais CAPTCHA possible). Un moteur qui bloque est mis de côté jusqu'à la fin de la tâche.
+3. **Vérification par preuves** de chaque site candidat, homepage puis pages contact et mentions légales : nom dans le domaine ou le titre, code postal, ville, rue, téléphone, **SIREN dans les mentions légales**. Une adresse dans un autre département écarte le site (homonymes).
+4. **Niveau de confiance** affiché dans la fiche : ✅ *vérifié* (identifiant ou adresse exacte) ou ⚠️ *à vérifier*, avec les preuves. Le bouton **❌ Ce n'est pas le bon site** écarte définitivement ce domaine pour ce prospect.
+
+#### Compléter les fiches avec Google Maps
+Les entreprises du registre officiel n'ont presque jamais de téléphone. Le bouton **📞 Compléter les téléphones** (ou **🗺️ Compléter via Google Maps** dans une fiche) cherche « nom + ville » sur Google Maps et récupère le téléphone, le site, la note et les avis. Le site affiché sur la fiche Google remplace une déduction incertaine, et une fiche Google sans site confirme que l'entreprise n'en a pas. Les volumes restent faibles (30 par passage), avec les mêmes précautions que l'onglet Google Maps.
+
 ### 3. Analyser
 Cliquez sur **⚡ Analyser** sur une ligne, ou sur **Analyser les prospects non analysés** pour tout traiter en une fois. Chaque analyse :
 - télécharge la page d'accueil et vérifie HTTPS et le certificat SSL ;
@@ -50,6 +61,23 @@ Cliquez sur **⚡ Analyser** sur une ligne, ou sur **Analyser les prospects non 
 - contrôle les obligations légales : mentions légales, bandeau cookies en présence de traceurs ;
 - vérifie les attentes du métier : réservation en ligne pour un restaurant, prise de rendez-vous pour un coiffeur, demande de devis et certifications pour un industriel, etc. ;
 - calcule un **score sur 100** et un niveau d'opportunité : 🔥🔥 sans site, 🔥 chaud, tiède, froid.
+
+L'analyse va plus loin qu'une simple page d'accueil :
+- elle attend que les styles et les polices soient chargés avant de mesurer, et écarte les rendus ratés (page vide, erreur, protection anti-robot) au lieu de les noter ;
+- elle **explore les pages internes utiles** (contact, mentions légales, carte, tarifs, réservation, devis) pour ne pas reprocher l'absence d'un élément présent ailleurs sur le site ;
+- elle mesure l'**affichage du contenu principal (LCP)** plutôt que la fin du chargement de tous les scripts tiers ;
+- elle identifie la **technologie** (WordPress et sa vraie version, Elementor, Wix, WebSite X5, Next.js, Bootstrap…) ;
+- elle juge l'**âge du design** à partir d'indices (police par défaut, absence de mise en page moderne, constructeur bas de gamme, copyright ancien, techniques des années 2000), ou par l'**IA visuelle** si elle est activée ;
+- elle relève les **points forts** (site rapide, à jour, réservation en ligne, bonne réputation Google…) pour commencer l'appel par un compliment sincère.
+
+**Notation :** le score est la somme de 7 catégories pondérées (sécurité 15, mobile 20, vitesse 15, design 20, conversion 20, référencement 7, légal 3). Chaque catégorie a un plancher : dix détails de référencement ne peuvent pas couler un site moderne. Un problème critique (pas de HTTPS, site non mobile, design très daté…) plafonne le score à 40. Une catégorie non mesurable (page impossible à afficher) est exclue du calcul au lieu de compter comme parfaite. Moins de 50 : 🔥 chaud, moins de 70 : tiède, au-delà : froid.
+
+### La fiche prospect
+- **Barre d'actions** : appeler, copier le numéro, rechercher sur Google, Google Maps, ouvrir le site, fiche officielle, compléter via Google Maps.
+- **Origine** : « Fiche créée depuis OpenStreetMap / Google Maps / registre INSEE », et les sources qui l'ont complétée.
+- **Site** : niveau de confiance, preuves, correction manuelle, rejet, relance de la recherche.
+- **Dirigeant** (registre officiel) : le script d'appel propose de le demander par son nom.
+- **Synthèse** : offre à proposer (création, refonte, modernisation, optimisation), 3 meilleurs arguments téléphoniques, score par catégorie, points forts, captures ordinateur et mobile.
 
 ### 4. Appeler
 L'onglet **📞 À appeler** liste les relances du jour et les meilleurs prospects jamais contactés. Dans la fiche d'un prospect :
@@ -93,6 +121,8 @@ Sans IA, les fiches sont rédigées par un moteur de règles fiable et instantan
 3. Le statut affiche la carte réellement utilisée par Ollama. Vérifiez que c'est bien la 1060.
 
 L'application lance son propre serveur Ollama sur le port 11435, avec `CUDA_VISIBLE_DEVICES` pointé sur l'identifiant unique de la 1060. Ce serveur **ne voit que cette carte** : la 1660 Ti reste entièrement disponible pour Windows et vos jeux. Si l'application Ollama classique tourne déjà sur le port 11434, pas de conflit : les modèles téléchargés sont partagés.
+
+**IA visuelle (recommandée) :** renseignez un **modèle de vision** (`qwen2.5vl:3b` tient dans les 6 Go de la 1060) puis cliquez à nouveau sur **⬇️ Télécharger le modèle**. Chaque capture d'écran est alors notée de 1 à 10 sur la modernité du design, avec une phrase qui cite les éléments datés. C'est la seule façon fiable de juger un « look » daté : les indices techniques ne voient pas un logo en WordArt.
 
 > La 1060 est une carte Pascal (architecture de 2016). Elle est supportée par les versions actuelles d'Ollama, mais NVIDIA abandonne progressivement ces cartes dans ses nouvelles versions de CUDA. Si un jour Ollama ne la détecte plus, restez sur la dernière version d'Ollama qui fonctionne ou utilisez un modèle plus petit (`gemma2:2b`) sur le processeur.
 
@@ -142,6 +172,6 @@ python -m pytest
 
 ## Limites connues
 
-- **DuckDuckGo** peut bloquer temporairement la recherche de sites après un grand nombre de requêtes. L'outil le détecte, le signale et continue avec la seule déduction du nom de domaine.
+- **Moteurs de recherche** : ils peuvent bloquer temporairement après un grand nombre de requêtes. Bing renvoie même parfois des résultats sans rapport pour piéger les robots : la vérification par preuves les écarte. L'outil met de côté tout moteur qui bloque et continue avec les autres.
 - **Faux « sans site » :** une entreprise du registre peut avoir un site que l'outil n'a pas trouvé, notamment quand son nom commercial diffère de son nom légal. Vérifiez rapidement avant d'appeler, et corrigez l'URL dans la fiche : l'analyse se relance en un clic.
 - **Temps de chargement :** il est mesuré depuis votre connexion. Sur une fibre, les sites paraîtront plus rapides que sur la 4G de vos prospects.

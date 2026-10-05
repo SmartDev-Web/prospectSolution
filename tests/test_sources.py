@@ -3,7 +3,9 @@ from app.sectors import SECTORS_BY_KEY
 from app.sources.google_maps import parse_place, parse_review_count, unwrap_google_redirect
 from app.sources.government import build_activity_filters, naf_code_matches, parse_establishment
 from app.sources.openstreetmap import build_overpass_query, parse_overpass_element
-from app.sources.website_finder import BusinessIdentity, build_domain_candidates, extract_search_result_urls, page_belongs_to_business
+from app.sources.search_engines import decode_bing_redirect, parse_bing_results, parse_duckduckgo_results, parse_google_results
+from app.sources.website_finder import build_domain_candidates
+from app.sources.website_verification import BusinessIdentity, evaluate_pages, parse_page
 
 COMPANY = {"nom_complet": "AL NOUR SARL", "nom_raison_sociale": "AL NOUR SARL", "categorie_entreprise": "PME", "activite_principale": "47.22Z"}
 ESTABLISHMENT = {
@@ -63,11 +65,50 @@ def test_google_maps_place_parsing():
     assert unwrap_google_redirect("https://example.fr") == "https://example.fr"
 
 
-def test_website_finder_helpers():
-    identity = BusinessIdentity(name="Boucherie Brume", alternative_names=["EURL BRUME"], city="Castelnau-le-Lez", postal_code="34170", phone=None)
+def test_domain_candidates_cover_common_extensions_and_variants():
+    identity = BusinessIdentity(name="O'BUFFET", city="Mauguio")
     domain_candidates = build_domain_candidates(identity)
-    assert "boucheriebrume.fr" in domain_candidates and "boucherie-brume.com" in domain_candidates
-    assert page_belongs_to_business("<html><body>Boucherie Brume, 34170 Castelnau-le-Lez</body></html>", identity)
-    assert not page_belongs_to_business("<html><body>Boucherie Brume, 75011 Paris</body></html>", identity)
-    results_html = '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fboucherie-brume.fr%2F&rut=x">Brume</a>'
-    assert extract_search_result_urls(results_html) == ["https://boucherie-brume.fr/"]
+    assert "obuffet.eu" in domain_candidates
+    assert "obuffet.fr" in domain_candidates and "obuffet-mauguio.fr" in domain_candidates
+    duke_candidates = build_domain_candidates(BusinessIdentity(name="LE DUKE SMASHED", alternative_names=["LE DUKE MOOV"], city="Lattes"))
+    assert "ledukesmashed.com" in duke_candidates and "duke-smashed.fr" in duke_candidates
+
+
+def test_verification_accepts_the_real_site_and_rejects_homonyms():
+    identity = BusinessIdentity(name="Boucherie Brume", alternative_names=["EURL BRUME"], city="Castelnau-le-Lez", postal_code="34170", siren="123456789")
+    real_site = parse_page("https://www.boucherie-brume.fr/", "<html><title>Boucherie Brume</title><body>Boucherie Brume, 34170 Castelnau-le-Lez</body></html>")
+    assert evaluate_pages(real_site, [], identity, False).confidence == "high"
+    homonym = parse_page("https://www.boucherie-brume.fr/", "<html><title>Boucherie Brume</title><body>Boucherie Brume, 75011 Paris</body></html>")
+    assert evaluate_pages(homonym, [], identity, False).confidence is None
+    legal_page = parse_page("https://brume-viandes.fr/mentions-legales", "<body>SIREN 123 456 789</body>")
+    other_domain = parse_page("https://brume-viandes.fr/", "<html><title>Viandes</title><body>Brume, artisan boucher</body></html>")
+    assert evaluate_pages(other_domain, [legal_page], identity, False).confidence == "high"
+    parked = parse_page("https://boucherie-brume.com/", "<body>Boucherie Brume 34170 - this domain is for sale</body>")
+    assert evaluate_pages(parked, [], identity, False).confidence is None
+
+
+def test_verification_handles_a_brand_name_different_from_the_registry():
+    identity = BusinessIdentity(name="LE DUKE SMASHED", alternative_names=["LE DUKE MOOV"], city="Lattes", postal_code="34970")
+    duke_site = parse_page(
+        "https://www.ledukestreetcantine.com/",
+        "<html><title>Foodtruck, restaurant Baillargues</title><body>Le Duke pose ses valises à Baillargues 34670, smashed burgers</body></html>",
+    )
+    evidence = evaluate_pages(duke_site, [], identity, True)
+    assert evidence.confidence == "medium"
+
+
+def test_search_result_parsers():
+    duckduckgo_html = '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fboucherie-brume.fr%2F&rut=x">Brume</a>'
+    assert parse_duckduckgo_results(duckduckgo_html) == ["https://boucherie-brume.fr/"]
+    bing_link = "https://www.bing.com/ck/a?!&&p=abc&u=a1aHR0cHM6Ly93d3cub2J1ZmZldC5ldS8&ntb=1"
+    assert decode_bing_redirect(bing_link) == "https://www.obuffet.eu/"
+    assert parse_bing_results(f'<li class="b_algo"><h2><a href="{bing_link}">O Buffet</a></h2></li>') == ["https://www.obuffet.eu/"]
+    google_html = '<div id="rso"><a href="https://www.obuffet.eu/"><h3>O Buffet</h3></a><a href="https://maps.google.com/x"><h3>Maps</h3></a></div>'
+    assert parse_google_results(google_html) == ["https://www.obuffet.eu/"]
+
+
+def test_single_word_domain_guess_needs_hard_proof():
+    identity = BusinessIdentity(name="SARL DU LITTORAL", city="Saint-Aunès", postal_code="34130")
+    generic_site = parse_page("https://www.littoral.com/", "<html><title>Littoral</title><body>Le littoral, 34000 Montpellier</body></html>")
+    evidence = evaluate_pages(generic_site, [], identity, False)
+    assert evidence.confidence == "medium" and not evidence.full_name_in_domain

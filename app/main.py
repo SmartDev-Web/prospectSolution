@@ -18,12 +18,22 @@ from app.http_client import OpenDataError
 from app.jobs import JobContext, job_manager
 from app.llm.gpu import list_graphics_cards
 from app.llm.ollama import ollama_service
-from app.models import ActivityCreate, GoogleMapsSearchRequest, OpenDataSearchRequest, ProspectCandidate, ProspectCreate, ProspectUpdate, ScanRequest
+from app.models import (
+    ActivityCreate,
+    GoogleMapsEnrichmentRequest,
+    GoogleMapsSearchRequest,
+    OpenDataSearchRequest,
+    ProspectCandidate,
+    ProspectCreate,
+    ProspectUpdate,
+    ScanRequest,
+    WebsiteDiscoveryRequest,
+)
 from app.prospects import prospect_repository
 from app.scanner.lighthouse import find_lighthouse_executable
 from app.sectors import get_sector, serialize_sectors
 from app.settings_service import load_settings, save_settings
-from app.workflows import start_google_maps_search, start_open_data_search, start_scan_job
+from app.workflows import start_google_maps_enrichment, start_google_maps_search, start_open_data_search, start_scan_job, start_website_discovery_job
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +93,7 @@ async def create_open_data_search(search_request: OpenDataSearchRequest) -> dict
 
 @application.post("/api/searches/google-maps")
 async def create_google_maps_search(search_request: GoogleMapsSearchRequest) -> dict:
-    if job_manager.has_running_job("google_maps_search"):
+    if job_manager.has_running_job("google_maps_search") or job_manager.has_running_job("google_maps_enrichment"):
         raise HTTPException(status_code=409, detail="Une session Google Maps est déjà en cours.")
     try:
         return start_google_maps_search(search_request).to_dict()
@@ -140,6 +150,12 @@ async def create_prospect(prospect_create: ProspectCreate) -> dict:
     return require_prospect(prospect_identifier)
 
 
+@application.post("/api/prospects/remove-chains")
+async def remove_chain_prospects() -> dict:
+    removed_names = prospect_repository.remove_chains()
+    return {"removed": len(removed_names), "names": removed_names}
+
+
 @application.get("/api/prospects/{prospect_identifier}")
 async def get_prospect(prospect_identifier: int) -> dict:
     return require_prospect(prospect_identifier)
@@ -174,6 +190,31 @@ async def create_scan(scan_request: ScanRequest) -> dict:
     return start_scan_job(prospect_identifiers).to_dict()
 
 
+@application.post("/api/website-discovery")
+async def create_website_discovery(discovery_request: WebsiteDiscoveryRequest) -> dict:
+    prospect_identifiers = discovery_request.prospect_ids or (prospect_repository.list_ids_without_website() if discovery_request.all_without_website else [])
+    if not prospect_identifiers:
+        raise HTTPException(status_code=400, detail="Aucun prospect sans site à traiter.")
+    return start_website_discovery_job(prospect_identifiers).to_dict()
+
+
+@application.post("/api/google-maps-enrichment")
+async def create_google_maps_enrichment(enrichment_request: GoogleMapsEnrichmentRequest) -> dict:
+    if job_manager.has_running_job("google_maps_search") or job_manager.has_running_job("google_maps_enrichment"):
+        raise HTTPException(status_code=409, detail="Une session Google Maps est déjà en cours.")
+    prospect_identifiers = enrichment_request.prospect_ids or (prospect_repository.list_ids_without_phone(enrichment_request.limit) if enrichment_request.all_without_phone else [])
+    if not prospect_identifiers:
+        raise HTTPException(status_code=400, detail="Aucun prospect à compléter.")
+    return start_google_maps_enrichment(prospect_identifiers).to_dict()
+
+
+@application.post("/api/prospects/{prospect_identifier}/reject-website")
+async def reject_prospect_website(prospect_identifier: int) -> dict:
+    require_prospect(prospect_identifier)
+    prospect_repository.reject_website(prospect_identifier)
+    return require_prospect(prospect_identifier)
+
+
 @application.get("/api/follow-ups")
 async def list_follow_ups(until: str | None = None) -> list[dict]:
     return prospect_repository.list_due_follow_ups(until or date.today().isoformat())
@@ -187,6 +228,16 @@ async def get_statistics() -> dict:
 @application.get("/api/jobs")
 async def list_jobs() -> list[dict]:
     return job_manager.list_jobs()
+
+
+@application.delete("/api/jobs/{job_identifier}")
+async def remove_job(job_identifier: int) -> dict:
+    return {"removed": job_manager.remove(job_identifier)}
+
+
+@application.post("/api/jobs/clear")
+async def clear_finished_jobs() -> dict:
+    return {"removed": job_manager.clear_finished()}
 
 
 @application.post("/api/jobs/{job_identifier}/cancel")
@@ -229,15 +280,17 @@ async def stop_language_model() -> dict:
 
 @application.post("/api/llm/pull")
 async def pull_language_model() -> dict:
-    model_name = load_settings()["llm_model"]
+    settings = load_settings()
+    model_names = [model_name for model_name in (settings["llm_model"], settings["llm_vision_model"]) if model_name]
     if not await ollama_service.is_available():
         raise HTTPException(status_code=400, detail="Le serveur Ollama ne répond pas : démarrez-le d'abord.")
     async def run(context: JobContext) -> None:
-        def report_progress(completed_bytes: int, total_bytes: int, status_text: str) -> None:
-            context.set_progress(completed_bytes // 1_000_000, total_bytes // 1_000_000 or None, f"{status_text} ({completed_bytes // 1_000_000} / {total_bytes // 1_000_000} Mo)")
-        await ollama_service.pull_model(model_name, report_progress)
-        context.log(f"Modèle {model_name} prêt.")
-    return job_manager.start("llm_pull", f"Téléchargement du modèle {model_name}", run).to_dict()
+        for model_name in model_names:
+            def report_progress(completed_bytes: int, total_bytes: int, status_text: str) -> None:
+                context.set_progress(completed_bytes // 1_000_000, total_bytes // 1_000_000 or None, f"{model_name} : {status_text} ({completed_bytes // 1_000_000} / {total_bytes // 1_000_000} Mo)")
+            await ollama_service.pull_model(model_name, report_progress)
+            context.log(f"Modèle {model_name} prêt.")
+    return job_manager.start("llm_pull", f"Téléchargement : {', '.join(model_names)}", run).to_dict()
 
 
 @application.websocket("/ws")

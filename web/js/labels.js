@@ -27,11 +27,26 @@ export const SOURCE_LABELS = {
   manual: "Saisie manuelle",
 };
 
+export const SOURCE_LONG_LABELS = {
+  government_registry: "Registre officiel INSEE / Sirene",
+  openstreetmap: "OpenStreetMap",
+  google_maps: "Google Maps",
+  manual: "Saisie manuelle",
+};
+
+export const CONFIDENCE_LABELS = {
+  high: { label: "✅ Site vérifié", className: "confidence-high" },
+  medium: { label: "⚠️ À vérifier", className: "confidence-medium" },
+};
+
 export const WEBSITE_ORIGIN_LABELS = {
   openstreetmap: "OpenStreetMap",
   google_maps: "Google Maps",
-  domain_guess: "déduit du nom",
-  search_engine: "trouvé via DuckDuckGo",
+  domain_guess: "déduit du nom de l'entreprise",
+  search_engine: "trouvé via un moteur de recherche",
+  duckduckgo: "trouvé via DuckDuckGo",
+  bing: "trouvé via Bing",
+  google_browser: "trouvé via Google",
   manual: "saisi manuellement",
 };
 
@@ -69,5 +84,12 @@ export const METRIC_LABELS = {
   trackers: "Traceurs détectés",
   cookie_consent: "Bandeau cookies",
   render_error: "Erreur de rendu",
+  technologies: "Technologies détectées",
+  largest_paint_seconds: "Affichage du contenu principal (LCP, s)",
+  layout: "Indices de mise en page",
+  design_signals: "Signes de design daté",
+  visual_design_score: "Note visuelle IA (/10)",
+  visual_assessment: "Avis de l'IA visuelle",
+  crawled_pages: "Pages analysées",
   error: "Erreur",
 };

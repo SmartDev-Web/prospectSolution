@@ -4,6 +4,7 @@ import io
 import json
 from typing import Any
 
+from app.chains import detect_chain
 from app.database import get_database, utc_now_iso
 from app.events import event_bus
 from app.geo import haversine_distance_km
@@ -17,8 +18,8 @@ SAME_DOMAIN_MAX_DISTANCE_KM = 2.0
 COORDINATE_SEARCH_MARGIN_DEGREES = 0.004
 MERGEABLE_FIELDS = (
     "legal_name", "siret", "naf_code", "sector_key", "category_label", "company_category", "address", "postal_code",
-    "city", "latitude", "longitude", "phone", "email", "website_url", "website_origin", "social_url", "creation_date",
-    "employee_range", "google_rating", "google_review_count", "google_maps_url", "google_place_key",
+    "city", "latitude", "longitude", "phone", "email", "website_url", "website_origin", "website_confidence", "social_url",
+    "manager_name", "brand", "establishment_count", "creation_date", "employee_range", "google_rating", "google_review_count", "google_maps_url", "google_place_key",
 )
 # Values coming from these sources are refreshed on every import because they reflect live data
 REFRESHED_FIELDS_BY_SOURCE = {"google_maps": ("google_rating", "google_review_count", "google_maps_url")}
@@ -160,6 +161,8 @@ class ProspectRepository:
             changes["website_url"] = normalize_website_url(changes["website_url"])
             changes["website_domain"] = extract_domain(changes["website_url"])
             changes["website_origin"] = "manual" if changes["website_url"] else None
+            changes["website_confidence"] = "high" if changes["website_url"] else None
+            changes["website_evidence"] = "saisi manuellement" if changes["website_url"] else None
             changes["opportunity_level"] = None if changes["website_url"] else "no_website"
             changes["score"] = None
         if "phone" in changes:
@@ -171,17 +174,94 @@ class ProspectRepository:
             event_bus.publish("prospect.updated", updated_prospect)
         return updated_prospect
 
-    def record_website_check(self, prospect_identifier: int, website_url: str | None, website_origin: str | None, social_url: str | None) -> None:
+    def record_website_check(
+        self,
+        prospect_identifier: int,
+        website_url: str | None,
+        website_origin: str | None = None,
+        website_confidence: str | None = None,
+        website_evidence: list[str] | None = None,
+        social_url: str | None = None,
+    ) -> None:
         """Store the outcome of an automatic website discovery."""
         changes: dict[str, Any] = {"website_check_done": 1}
         if website_url:
-            changes.update({"website_url": website_url, "website_domain": extract_domain(website_url), "website_origin": website_origin, "opportunity_level": None})
+            changes.update({
+                "website_url": website_url,
+                "website_domain": extract_domain(website_url),
+                "website_origin": website_origin,
+                "website_confidence": website_confidence,
+                "website_evidence": ", ".join(website_evidence or []) or None,
+                "opportunity_level": None,
+                "score": None,
+            })
         else:
             changes["opportunity_level"] = "no_website"
         if social_url:
             changes["social_url"] = social_url
         self._write_changes(prospect_identifier, changes)
         event_bus.publish("prospect.updated", self.get_prospect(prospect_identifier))
+
+    def enrich_from_listing(self, prospect_identifier: int, candidate: ProspectCandidate | None) -> None:
+        """Complete a prospect with its Google Maps listing; a listing without website confirms the business has none."""
+        prospect_row = self.get_prospect(prospect_identifier)
+        if prospect_row is None:
+            return
+        if candidate is None:
+            self._write_changes(prospect_identifier, {"google_maps_checked": 1})
+            event_bus.publish("prospect.updated", self.get_prospect(prospect_identifier))
+            return
+        candidate.website_url = normalize_website_url(candidate.website_url)
+        candidate.phone = normalize_phone_number(candidate.phone)
+        self._merge_into_prospect(prospect_row, candidate)
+        changes: dict[str, Any] = {"google_maps_checked": 1}
+        if candidate.website_url and prospect_row["website_confidence"] != "high" and extract_domain(candidate.website_url) not in (prospect_row["rejected_domains"] or []):
+            # The listing maintained by the owner is more reliable than an automatic guess
+            changes.update({
+                "website_url": candidate.website_url,
+                "website_domain": extract_domain(candidate.website_url),
+                "website_origin": "google_maps",
+                "website_confidence": "high",
+                "website_evidence": "site affiché sur la fiche Google Maps",
+                "opportunity_level": None,
+                "score": None,
+            })
+        elif not candidate.website_url and not prospect_row["website_url"]:
+            changes.update({"website_check_done": 1, "opportunity_level": "no_website", "website_evidence": "aucun site sur la fiche Google Maps"})
+        self._write_changes(prospect_identifier, changes)
+        event_bus.publish("prospect.updated", self.get_prospect(prospect_identifier))
+
+    def list_ids_without_phone(self, limit: int) -> list[int]:
+        """Return prospects with no phone number never looked up on Google Maps, best opportunities first."""
+        rows = get_database().fetch_all(
+            f"SELECT id FROM prospects WHERE phone IS NULL AND google_maps_checked = 0 AND sources NOT LIKE '%google_maps%' ORDER BY {SORTABLE_COLUMNS['opportunity']}, id LIMIT ?",
+            (limit,),
+        )
+        return [row["id"] for row in rows]
+
+    def reject_website(self, prospect_identifier: int) -> dict[str, Any] | None:
+        """Discard a wrongly matched website and remember its domain so that it is never proposed again."""
+        prospect_row = self.get_prospect(prospect_identifier)
+        rejected_domains = list(prospect_row["rejected_domains"] or [])
+        if prospect_row["website_domain"] and prospect_row["website_domain"] not in rejected_domains:
+            rejected_domains.append(prospect_row["website_domain"])
+        return self.update_prospect(prospect_identifier, {
+            "website_url": None,
+            "rejected_domains": json.dumps(rejected_domains),
+            "website_check_done": 1,
+        })
+
+    def remove_chains(self) -> list[str]:
+        """Delete every prospect recognised as a chain or franchise and return their names."""
+        removed_names = []
+        for prospect_row in get_database().fetch_all("SELECT * FROM prospects"):
+            names = [name for name in (prospect_row["name"], prospect_row["legal_name"]) if name]
+            if detect_chain(names, prospect_row["website_url"], prospect_row["brand"], prospect_row["establishment_count"]):
+                get_database().execute("DELETE FROM prospects WHERE id = ?", (prospect_row["id"],))
+                removed_names.append(prospect_row["name"])
+        if removed_names:
+            event_bus.publish("prospect.deleted", {"id": None})
+        return removed_names
 
     def apply_scan_result(self, prospect_identifier: int, score: int | None, opportunity_level: str, contact_changes: dict[str, Any]) -> None:
         """Copy the outcome of a website scan onto the prospect."""
@@ -253,15 +333,20 @@ class ProspectRepository:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         return [row["id"] for row in get_database().fetch_all(f"SELECT id FROM prospects {where_clause} ORDER BY id")]
 
-    def list_prospects_needing_website_check(self, prospect_identifiers: list[int]) -> list[dict[str, Any]]:
-        """Return prospects among the given ones without a website that were never checked."""
+    def list_prospects_needing_website_check(self, prospect_identifiers: list[int], include_already_checked: bool = False) -> list[dict[str, Any]]:
+        """Return prospects among the given ones that have no website, by default only those never checked."""
         if not prospect_identifiers:
             return []
         placeholders = ", ".join("?" for _ in prospect_identifiers)
+        checked_condition = "" if include_already_checked else "AND website_check_done = 0"
         return get_database().fetch_all(
-            f"SELECT * FROM prospects WHERE id IN ({placeholders}) AND website_url IS NULL AND website_check_done = 0",
+            f"SELECT * FROM prospects WHERE id IN ({placeholders}) AND website_url IS NULL {checked_condition}",
             tuple(prospect_identifiers),
         )
+
+    def list_ids_without_website(self) -> list[int]:
+        """Return identifiers of every prospect without a known website."""
+        return [row["id"] for row in get_database().fetch_all("SELECT id FROM prospects WHERE website_url IS NULL ORDER BY id")]
 
     def delete_prospect(self, prospect_identifier: int) -> None:
         """Delete a prospect with its scans and activities."""

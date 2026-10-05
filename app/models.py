@@ -36,7 +36,11 @@ class ProspectCandidate:
     email: str | None = None
     website_url: str | None = None
     website_origin: str | None = None
+    website_confidence: str | None = None
     social_url: str | None = None
+    manager_name: str | None = None
+    brand: str | None = None
+    establishment_count: int | None = None
     creation_date: str | None = None
     employee_range: str | None = None
     google_rating: float | None = None
@@ -62,6 +66,7 @@ class OpenDataSearchRequest(BaseModel):
     use_openstreetmap: bool = True
     discover_websites: bool = True
     exclude_large_companies: bool = True
+    exclude_chains: bool = True
     created_after: str | None = None
     max_results: int = Field(default=500, ge=1, le=5000)
     auto_scan: bool = False
@@ -74,6 +79,7 @@ class GoogleMapsSearchRequest(BaseModel):
     custom_queries: list[str] = []
     max_results_per_query: int = Field(default=40, ge=1, le=200)
     headless: bool | None = None
+    exclude_chains: bool = True
     auto_scan: bool = False
 
 
@@ -82,6 +88,19 @@ class ScanRequest(BaseModel):
     prospect_ids: list[int] = []
     only_unscanned: bool = False
     all_with_website: bool = False
+
+
+class WebsiteDiscoveryRequest(BaseModel):
+    """Selection of prospects whose website must be searched again."""
+    prospect_ids: list[int] = []
+    all_without_website: bool = False
+
+
+class GoogleMapsEnrichmentRequest(BaseModel):
+    """Prospects to complete with their Google Maps listing."""
+    prospect_ids: list[int] = []
+    all_without_phone: bool = False
+    limit: int = Field(default=30, ge=1, le=200)
 
 
 class ProspectCreate(BaseModel):

@@ -1,22 +1,139 @@
-// Prospect sheet: facts, pipeline actions, diagnosis, phone script, email and technical data.
+// Prospect sheet: quick actions, origin, website verification, pipeline, synthesis, diagnosis, script, email and technical data.
 import { requestJson } from "./api.js";
 import { renderScoreBadge } from "./components.js";
 import { copyToClipboard, createElement, formatDate, formatDateTime, isoDateInDays, readableHost, showToast } from "./dom.js";
-import { CALL_OUTCOMES, METRIC_LABELS, OPPORTUNITY_LABELS, SEVERITY_LABELS, SOURCE_LABELS, STATUS_LABELS, WEBSITE_ORIGIN_LABELS } from "./labels.js";
+import {
+  CALL_OUTCOMES,
+  CONFIDENCE_LABELS,
+  METRIC_LABELS,
+  OPPORTUNITY_LABELS,
+  SEVERITY_LABELS,
+  SOURCE_LONG_LABELS,
+  STATUS_LABELS,
+  WEBSITE_ORIGIN_LABELS,
+} from "./labels.js";
 import { liveEvents } from "./live.js";
 
 const SUB_TABS = [
+  { key: "synthesis", label: "🎯 Synthèse" },
   { key: "diagnosis", label: "🩺 Diagnostic" },
   { key: "script", label: "📞 Script d'appel" },
   { key: "email", label: "✉️ E-mail" },
-  { key: "screenshots", label: "🖼️ Captures" },
-  { key: "technical", label: "🔧 Données techniques" },
+  { key: "technical", label: "🔧 Technique" },
   { key: "history", label: "🕘 Historique" },
 ];
-const detailState = { prospect: null, activeSubTab: "diagnosis", renderPendingUntilBlur: false };
+const detailState = { prospect: null, activeSubTab: "synthesis", renderPendingUntilBlur: false };
 
 function drawerElement() {
   return document.getElementById("prospect-drawer");
+}
+
+function externalLink(url, text, className = "") {
+  return createElement("a", { href: url, target: "_blank", rel: "noopener", text, className });
+}
+
+function googleSearchUrl(prospect) {
+  const searchTerms = [prospect.name, prospect.city || prospect.postal_code].filter(Boolean).join(" ");
+  return `https://www.google.com/search?q=${encodeURIComponent(searchTerms)}`;
+}
+
+function googleMapsUrl(prospect) {
+  if (prospect.google_maps_url) return prospect.google_maps_url;
+  const searchTerms = [prospect.name, prospect.address || prospect.city].filter(Boolean).join(" ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchTerms)}`;
+}
+
+function officialRegistryUrl(prospect) {
+  if (prospect.siret) return `https://annuaire-entreprises.data.gouv.fr/etablissement/${prospect.siret}`;
+  return `https://annuaire-entreprises.data.gouv.fr/rechercher?terme=${encodeURIComponent(prospect.legal_name || prospect.name)}`;
+}
+
+// Actions answering with the prospect refresh the sheet; actions starting a job leave it to live events
+async function runProspectAction(actionPromise, successMessage, answersWithProspect = true) {
+  try {
+    const actionResult = await actionPromise;
+    if (answersWithProspect && actionResult) detailState.prospect = actionResult;
+    if (successMessage) showToast(successMessage);
+    renderDetail();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function updateProspect(changes) {
+  return runProspectAction(requestJson(`/api/prospects/${detailState.prospect.id}`, { method: "PATCH", body: changes }));
+}
+
+function startScan(prospect) {
+  return runProspectAction(requestJson("/api/scans", { method: "POST", body: { prospect_ids: [prospect.id] } }), "Analyse lancée : la fiche se mettra à jour automatiquement.", false);
+}
+
+function renderActionBar(prospect) {
+  const actionLinks = [
+    prospect.phone ? createElement("a", { className: "button primary small", href: `tel:${prospect.phone.replace(/\s/g, "")}`, text: `📞 ${prospect.phone}` }) : null,
+    prospect.phone ? createElement("button", { className: "button secondary small", text: "📋 Copier le numéro", onClick: () => copyToClipboard(prospect.phone) }) : null,
+    externalLink(googleSearchUrl(prospect), "🔎 Rechercher sur Google", "button secondary small"),
+    externalLink(googleMapsUrl(prospect), prospect.google_maps_url ? "🗺️ Fiche Google Maps" : "🗺️ Chercher sur Maps", "button secondary small"),
+    prospect.website_url ? externalLink(prospect.website_url, "🌐 Ouvrir le site", "button secondary small") : null,
+    externalLink(officialRegistryUrl(prospect), "🏛️ Fiche officielle", "button secondary small"),
+    (prospect.sources || []).includes("google_maps") ? null : createElement("button", {
+      className: "button secondary small",
+      text: prospect.google_maps_checked ? "🗺️ Recompléter via Google Maps" : "🗺️ Compléter via Google Maps",
+      title: "Cherche la fiche Google Maps de l'entreprise pour récupérer téléphone, site, note et avis",
+      onClick: () => runProspectAction(requestJson("/api/google-maps-enrichment", { method: "POST", body: { prospect_ids: [prospect.id] } }), "Recherche sur Google Maps lancée.", false),
+    }),
+  ];
+  return createElement("div", { className: "action-bar" }, actionLinks);
+}
+
+function renderOrigin(prospect) {
+  const [creationSource, ...enrichmentSources] = prospect.sources || [];
+  return createElement("div", { className: "origin-line" }, [
+    createElement("span", { className: "origin-badge", text: `Fiche créée depuis : ${SOURCE_LONG_LABELS[creationSource] || creationSource || "inconnu"}` }),
+    enrichmentSources.length ? createElement("span", { className: "muted", text: ` · complétée par : ${enrichmentSources.map((source) => SOURCE_LONG_LABELS[source] || source).join(", ")}` }) : null,
+    createElement("span", { className: "muted", text: ` · ajoutée le ${formatDate(prospect.created_at)}` }),
+  ]);
+}
+
+function renderWebsiteBlock(prospect) {
+  const websiteInput = createElement("input", { type: "url", value: prospect.website_url || "", placeholder: "Coller l'adresse du site (https://…)" });
+  const editorRow = createElement("div", { className: "inline-fields" }, [
+    websiteInput,
+    createElement("button", { className: "button secondary small", text: prospect.website_url ? "Corriger" : "Enregistrer", onClick: () => updateProspect({ website_url: websiteInput.value.trim() || null }) }),
+  ]);
+  if (!prospect.website_url) {
+    return createElement("div", { className: "panel website-block" }, [
+      createElement("div", { className: "website-title" }, [createElement("strong", { text: "🌐 Aucun site connu" }), prospect.website_check_done ? createElement("span", { className: "muted", text: " · la recherche automatique n'a rien trouvé de fiable" }) : null]),
+      createElement("div", { className: "action-bar" }, [
+        externalLink(googleSearchUrl(prospect), "🔎 Vérifier sur Google", "button secondary small"),
+        createElement("button", {
+          className: "button secondary small",
+          text: "🤖 Relancer la recherche automatique",
+          onClick: () => runProspectAction(requestJson("/api/website-discovery", { method: "POST", body: { prospect_ids: [prospect.id] } }), "Recherche du site lancée.", false),
+        }),
+        createElement("button", { className: "button primary small", text: "⚡ Générer la fiche « sans site »", onClick: () => startScan(prospect) }),
+      ]),
+      editorRow,
+    ]);
+  }
+  const confidence = CONFIDENCE_LABELS[prospect.website_confidence];
+  return createElement("div", { className: "panel website-block" }, [
+    createElement("div", { className: "website-title" }, [
+      createElement("strong", {}, ["🌐 ", externalLink(prospect.website_url, readableHost(prospect.website_url))]),
+      confidence ? createElement("span", { className: `confidence ${confidence.className}`, text: confidence.label }) : null,
+      createElement("span", { className: "muted", text: ` · ${WEBSITE_ORIGIN_LABELS[prospect.website_origin] || prospect.website_origin || "source inconnue"}` }),
+    ]),
+    prospect.website_evidence ? createElement("div", { className: "muted small-text", text: `Preuves : ${prospect.website_evidence}` }) : null,
+    createElement("div", { className: "action-bar" }, [
+      createElement("button", { className: "button primary small", text: prospect.last_scan_at ? "🔄 Ré-analyser" : "⚡ Analyser le site", onClick: () => startScan(prospect) }),
+      createElement("button", {
+        className: "button secondary small",
+        text: "❌ Ce n'est pas le bon site",
+        onClick: () => runProspectAction(requestJson(`/api/prospects/${prospect.id}/reject-website`, { method: "POST" }), "Site écarté : il ne sera plus proposé pour ce prospect."),
+      }),
+    ]),
+    editorRow,
+  ]);
 }
 
 function renderFact(label, value) {
@@ -25,32 +142,17 @@ function renderFact(label, value) {
 }
 
 function renderFacts(prospect) {
-  const externalLink = (url, text) => createElement("a", { href: url, target: "_blank", rel: "noopener", text });
-  const websiteValue = prospect.website_url
-    ? createElement("span", {}, [externalLink(prospect.website_url, readableHost(prospect.website_url)), createElement("span", { className: "muted", text: prospect.website_origin ? ` (${WEBSITE_ORIGIN_LABELS[prospect.website_origin] || prospect.website_origin})` : "" })])
-    : createElement("span", { className: "muted", text: "Aucun site connu" });
   return createElement("div", { className: "fact-grid" }, [
-    renderFact("Téléphone", prospect.phone ? createElement("a", { href: `tel:${prospect.phone.replace(/\s/g, "")}`, text: `📞 ${prospect.phone}` }) : null),
+    renderFact("Dirigeant", prospect.manager_name ? `👤 ${prospect.manager_name}` : null),
     renderFact("E-mail", prospect.email ? createElement("a", { href: `mailto:${prospect.email}`, text: prospect.email }) : null),
-    renderFact("Site web", websiteValue),
-    renderFact("Réseau social", prospect.social_url ? externalLink(prospect.social_url, readableHost(prospect.social_url)) : null),
     renderFact("Adresse", prospect.address),
-    renderFact("Google Maps", prospect.google_maps_url ? externalLink(prospect.google_maps_url, `Voir la fiche${prospect.google_rating ? ` (★ ${prospect.google_rating} · ${prospect.google_review_count || 0} avis)` : ""}`) : null),
+    renderFact("Réseau social", prospect.social_url ? externalLink(prospect.social_url, readableHost(prospect.social_url)) : null),
+    renderFact("Avis Google", prospect.google_rating ? `★ ${String(prospect.google_rating).replace(".", ",")} (${prospect.google_review_count || 0} avis)` : null),
     renderFact("Raison sociale", prospect.legal_name !== prospect.name ? prospect.legal_name : null),
-    renderFact("SIRET", prospect.siret ? externalLink(`https://annuaire-entreprises.data.gouv.fr/etablissement/${prospect.siret}`, prospect.siret) : null),
+    renderFact("SIRET", prospect.siret),
     renderFact("Création", formatDate(prospect.creation_date)),
     renderFact("Effectif", prospect.employee_range),
-    renderFact("Sources", (prospect.sources || []).map((source) => SOURCE_LABELS[source] || source).join(", ")),
   ]);
-}
-
-async function updateProspect(changes) {
-  try {
-    detailState.prospect = await requestJson(`/api/prospects/${detailState.prospect.id}`, { method: "PATCH", body: changes });
-    renderDetail();
-  } catch (error) {
-    showToast(error.message, "error");
-  }
 }
 
 async function logCall(callOutcome) {
@@ -61,19 +163,17 @@ async function logCall(callOutcome) {
     nextFollowUp = chosenDate;
   }
   const noteText = window.prompt("Note sur l'appel (facultatif) :", "") || "";
-  detailState.prospect = await requestJson(`/api/prospects/${detailState.prospect.id}/activities`, {
+  await runProspectAction(requestJson(`/api/prospects/${detailState.prospect.id}/activities`, {
     method: "POST",
     body: { kind: "call", outcome: callOutcome.outcome, content: noteText, next_follow_up: nextFollowUp },
-  });
-  showToast(`Appel enregistré : ${callOutcome.label}`);
-  renderDetail();
+  }), `Appel enregistré : ${callOutcome.label}`);
 }
 
 function renderPipelineBlock(prospect) {
   const statusSelect = createElement("select", { onChange: (changeEvent) => updateProspect({ status: changeEvent.target.value }) },
     Object.entries(STATUS_LABELS).map(([statusKey, statusLabel]) => createElement("option", { value: statusKey, text: statusLabel, selected: statusKey === prospect.status })));
   const followUpInput = createElement("input", { type: "date", value: prospect.next_follow_up || "", onChange: (changeEvent) => updateProspect({ next_follow_up: changeEvent.target.value || null }) });
-  const notesInput = createElement("textarea", { rows: 3, placeholder: "Notes libres…", onChange: (changeEvent) => updateProspect({ notes: changeEvent.target.value }) }, prospect.notes || "");
+  const notesInput = createElement("textarea", { rows: 2, placeholder: "Notes libres…", onChange: (changeEvent) => updateProspect({ notes: changeEvent.target.value }) }, prospect.notes || "");
   return createElement("div", { className: "panel" }, [
     createElement("div", { className: "call-buttons" }, CALL_OUTCOMES.map((callOutcome) => createElement("button", { className: "button secondary small", text: callOutcome.label, onClick: () => logCall(callOutcome) }))),
     createElement("div", { className: "crm-block" }, [
@@ -84,32 +184,77 @@ function renderPipelineBlock(prospect) {
   ]);
 }
 
-function renderWebsiteEditor(prospect) {
-  const websiteInput = createElement("input", { type: "url", value: prospect.website_url || "", placeholder: "https://…" });
-  return createElement("div", { className: "inline-fields" }, [
-    websiteInput,
-    createElement("button", { className: "button secondary small", text: "Corriger le site", onClick: () => updateProspect({ website_url: websiteInput.value.trim() || null }) }),
-    createElement("button", {
-      className: "button primary small",
-      text: prospect.last_scan_at ? "🔄 Ré-analyser" : "⚡ Analyser",
-      onClick: async () => {
-        await requestJson("/api/scans", { method: "POST", body: { prospect_ids: [prospect.id] } });
-        showToast("Analyse lancée : la fiche se mettra à jour automatiquement.");
-      },
-    }),
+function renderScoreBreakdown(scoreBreakdown) {
+  if (!scoreBreakdown) return null;
+  return createElement("div", { className: "score-breakdown" }, Object.values(scoreBreakdown).map((bucket) => {
+    if (bucket.measured === false) {
+      return createElement("div", { className: "breakdown-row" }, [
+        createElement("span", { className: "breakdown-label", text: bucket.label }),
+        createElement("span", { className: "muted small-text", text: "non mesuré (page non affichée)" }),
+        createElement("span", { className: "breakdown-value", text: "—" }),
+      ]);
+    }
+    const ratio = bucket.weight ? bucket.score / bucket.weight : 0;
+    const level = ratio >= 0.75 ? "good" : ratio >= 0.4 ? "average" : "bad";
+    return createElement("div", { className: "breakdown-row" }, [
+      createElement("span", { className: "breakdown-label", text: bucket.label }),
+      createElement("div", { className: "breakdown-track" }, createElement("div", { className: `breakdown-bar ${level}`, style: `width: ${Math.round(ratio * 100)}%` })),
+      createElement("span", { className: "breakdown-value", text: `${Math.round(bucket.score)}/${bucket.weight}` }),
+    ]);
+  }));
+}
+
+function renderScreenshots(scan) {
+  if (!scan || (!scan.desktop_screenshot && !scan.mobile_screenshot)) return null;
+  return createElement("div", { className: "screenshots" }, [
+    scan.desktop_screenshot ? createElement("a", { href: `/screenshots/${scan.desktop_screenshot}`, target: "_blank" }, createElement("img", { src: `/screenshots/${scan.desktop_screenshot}`, alt: "Capture ordinateur", loading: "lazy" })) : null,
+    scan.mobile_screenshot ? createElement("a", { href: `/screenshots/${scan.mobile_screenshot}`, target: "_blank" }, createElement("img", { src: `/screenshots/${scan.mobile_screenshot}`, alt: "Capture mobile", loading: "lazy" })) : null,
   ]);
 }
 
+function renderSynthesis(report, scan) {
+  const offer = report.offer;
+  const strengths = report.strengths || [];
+  const criticalCount = (report.problems || []).filter((problem) => problem.severity === "critical").length;
+  const majorCount = (report.problems || []).filter((problem) => problem.severity === "major").length;
+  return [
+    offer ? createElement("div", { className: "offer-card" }, [
+      createElement("div", { className: "offer-label", text: "Offre à proposer" }),
+      createElement("div", { className: "offer-title", text: offer.title }),
+      createElement("div", { text: offer.pitch }),
+    ]) : null,
+    createElement("p", { text: report.summary }),
+    (report.call_arguments || []).length ? createElement("div", { className: "panel" }, [
+      createElement("strong", { text: "🎯 Vos 3 meilleurs arguments au téléphone" }),
+      createElement("ol", {}, report.call_arguments.map((argument) => createElement("li", { text: argument }))),
+    ]) : null,
+    createElement("div", { className: "synthesis-columns" }, [
+      createElement("div", {}, [
+        createElement("h3", { text: `Score par catégorie` }),
+        renderScoreBreakdown(report.score_breakdown) || createElement("p", { className: "muted", text: "Pas de site à noter." }),
+        createElement("p", { className: "muted", text: `${criticalCount} problème(s) critique(s), ${majorCount} important(s).` }),
+      ]),
+      createElement("div", {}, [
+        createElement("h3", { text: `Points forts (${strengths.length})` }),
+        strengths.length
+          ? createElement("ul", { className: "strength-list" }, strengths.map((strength) => createElement("li", { text: `✅ ${strength.label}` })))
+          : createElement("p", { className: "muted", text: "Aucun point fort notable." }),
+      ]),
+    ]),
+    renderScreenshots(scan),
+  ];
+}
+
 function renderDiagnosis(report) {
-  const problemsBySeverity = (report.problems || []).map((problem) => createElement("div", { className: `problem ${problem.severity}` }, [
+  const problemElements = (report.problems || []).map((problem) => createElement("div", { className: `problem ${problem.severity}` }, [
     createElement("div", { className: "problem-title" }, [createElement("span", { className: `tag ${problem.severity}`, text: SEVERITY_LABELS[problem.severity] }), " ", createElement("span", { className: "tag", text: problem.category_label }), " ", problem.title]),
     createElement("div", { text: problem.impact }),
+    createElement("div", { className: "muted small-text", text: `➜ ${problem.recommendation}` }),
   ]));
   return [
-    createElement("p", { text: report.summary }),
     createElement("h3", { text: `Ce qui ne va pas (${(report.problems || []).length})` }),
-    ...problemsBySeverity,
-    createElement("h3", { text: "Points à améliorer" }),
+    ...problemElements,
+    createElement("h3", { text: "Plan d'amélioration" }),
     createElement("ol", {}, (report.improvements || []).map((improvement) => createElement("li", { text: improvement }))),
   ];
 }
@@ -138,19 +283,11 @@ function renderEmail(report, prospect) {
   ];
 }
 
-function renderScreenshots(scan) {
-  if (!scan || (!scan.desktop_screenshot && !scan.mobile_screenshot)) return [createElement("p", { className: "muted", text: "Aucune capture disponible." })];
-  return [createElement("div", { className: "screenshots" }, [
-    scan.desktop_screenshot ? createElement("a", { href: `/screenshots/${scan.desktop_screenshot}`, target: "_blank" }, createElement("img", { src: `/screenshots/${scan.desktop_screenshot}`, alt: "Capture ordinateur" })) : null,
-    scan.mobile_screenshot ? createElement("a", { href: `/screenshots/${scan.mobile_screenshot}`, target: "_blank" }, createElement("img", { src: `/screenshots/${scan.mobile_screenshot}`, alt: "Capture mobile" })) : null,
-  ])];
-}
-
 function formatMetricValue(metricValue) {
   if (metricValue === true) return "Oui";
   if (metricValue === false) return "Non";
   if (Array.isArray(metricValue)) return metricValue.join(", ") || "Aucun";
-  if (metricValue && typeof metricValue === "object") return Object.entries(metricValue).map(([metricKey, value]) => `${metricKey} : ${value}`).join(" · ");
+  if (metricValue && typeof metricValue === "object") return Object.entries(metricValue).map(([metricKey, value]) => `${metricKey} : ${formatMetricValue(value)}`).join(" · ");
   return metricValue === null || metricValue === undefined ? "—" : String(metricValue);
 }
 
@@ -161,8 +298,9 @@ function renderTechnicalData(scan) {
     createElement("td", { text: METRIC_LABELS[metricKey] || metricKey }),
     createElement("td", { text: formatMetricValue(metricValue) }),
   ]));
+  const generator = (scan.report || {}).generator;
   return [
-    createElement("p", { className: "muted", text: `Analyse du ${formatDateTime(scan.scanned_at)} · rédaction : ${(scan.report || {}).generator === "rules" ? "moteur de règles" : (scan.report || {}).generator}` }),
+    createElement("p", { className: "muted", text: `Analyse du ${formatDateTime(scan.scanned_at)} · rédaction : ${generator === "rules" ? "moteur de règles" : generator}` }),
     createElement("table", { className: "metrics-table" }, metricRows),
     createElement("h3", { text: "Coordonnées trouvées sur le site" }),
     createElement("p", { text: `Téléphones : ${formatMetricValue(contacts.phones || [])}` }),
@@ -185,12 +323,12 @@ function renderSubView(prospect) {
   const scan = prospect.latest_scan;
   const report = scan ? scan.report : null;
   if (detailState.activeSubTab === "history") return renderHistory(prospect.activities || []);
-  if (detailState.activeSubTab === "screenshots") return renderScreenshots(scan);
   if (detailState.activeSubTab === "technical") return renderTechnicalData(scan);
-  if (!report) return [createElement("p", { className: "muted", text: "Lancez l'analyse pour générer le diagnostic, le script d'appel et l'e-mail." })];
+  if (!report) return [createElement("p", { className: "muted", text: "Lancez l'analyse pour générer la synthèse, le diagnostic, le script d'appel et l'e-mail." })];
+  if (detailState.activeSubTab === "diagnosis") return renderDiagnosis(report);
   if (detailState.activeSubTab === "script") return renderCallScript(report);
   if (detailState.activeSubTab === "email") return renderEmail(report, prospect);
-  return renderDiagnosis(report);
+  return renderSynthesis(report, scan);
 }
 
 function renderDetail() {
@@ -212,10 +350,12 @@ function renderDetail() {
         createElement("div", { className: "muted", text: [prospect.category_label, prospect.city].filter(Boolean).join(" · ") }),
         prospect.opportunity_level ? createElement("span", { className: `tag ${prospect.opportunity_level}`, text: OPPORTUNITY_LABELS[prospect.opportunity_level] }) : null,
       ]),
-      createElement("button", { className: "button ghost drawer-close", text: "✕", onClick: closeProspectDetail }),
+      createElement("button", { className: "button ghost drawer-close", text: "✕", "aria-label": "Fermer", onClick: closeProspectDetail }),
     ]),
+    renderOrigin(prospect),
+    renderActionBar(prospect),
+    renderWebsiteBlock(prospect),
     renderFacts(prospect),
-    renderWebsiteEditor(prospect),
     renderPipelineBlock(prospect),
     createElement("div", { className: "sub-tabs" }, subTabButtons),
     createElement("div", { className: "sub-view" }, renderSubView(prospect)),
@@ -243,7 +383,7 @@ async function reloadOpenProspect() {
 
 export async function openProspectDetail(prospectIdentifier) {
   detailState.prospect = await requestJson(`/api/prospects/${prospectIdentifier}`);
-  detailState.activeSubTab = "diagnosis";
+  detailState.activeSubTab = "synthesis";
   drawerElement().hidden = false;
   document.getElementById("drawer-backdrop").hidden = false;
   renderDetail();
@@ -270,7 +410,18 @@ export function initializeProspectDetail() {
   liveEvents.addEventListener("scan.completed", (scanEvent) => {
     if (detailState.prospect && scanEvent.detail.prospect_id === detailState.prospect.id) reloadOpenProspect();
   });
-  liveEvents.addEventListener("prospect.deleted", (deleteEvent) => {
-    if (detailState.prospect && deleteEvent.detail.id === detailState.prospect.id) closeProspectDetail();
+  liveEvents.addEventListener("prospect.updated", (updateEvent) => {
+    if (detailState.prospect && updateEvent.detail && updateEvent.detail.id === detailState.prospect.id) reloadOpenProspect();
   });
+  liveEvents.addEventListener("prospect.deleted", (deleteEvent) => {
+    if (detailState.prospect && (deleteEvent.detail.id === detailState.prospect.id || deleteEvent.detail.id === null)) reloadOpenProspectOrClose();
+  });
+}
+
+async function reloadOpenProspectOrClose() {
+  try {
+    await reloadOpenProspect();
+  } catch {
+    closeProspectDetail();
+  }
 }
